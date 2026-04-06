@@ -1,46 +1,60 @@
-name: Build Unsigned IPA
+name: Build Unsigned IPA (No PC)
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install Dependencies
+      - name: Install Build Tools
         run: |
           brew install cmake ninja
-          
-      - name: Setup iOS Toolchain
-        run: |
-          # This ensures the build environment targets iOS
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      - name: Configure and Build
+      - name: Build the Project
         run: |
-          mkdir build
+          # Create build directory
+          mkdir -p build
           cd build
-          # We use -DCODE_SIGNING_ALLOWED=NO to skip the Apple ID requirement
+          
+          # Run CMake with No-Signing flags for iOS
           cmake .. -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCODE_SIGNING_ALLOWED=NO \
             -DCODE_SIGN_IDENTITY="" \
-            -DCODE_SIGNING_REQUIRED=NO
+            -DCODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_BUILD_TYPE=Release
+
+          # Start compilation
           ninja
 
-      - name: Package as IPA
+      - name: Package IPA
         run: |
+          # 1. Create the Payload folder (required for IPA structure)
           mkdir -p Payload
-          # Change 'Neuron.app' to the actual name of the generated app folder
-          cp -r build/Neuron.app Payload/
-          zip -r Neuron-Unsigned.ipa Payload
           
-      - name: Upload Result
+          # 2. Find the .app folder automatically, wherever it is
+          APP_FOLDER=$(find . -name "*.app" -type d | head -n 1)
+          
+          if [ -z "$APP_FOLDER" ]; then
+            echo "Error: The compiler didn't create a .app file. Check the build logs above."
+            exit 1
+          fi
+          
+          echo "Found App at: $APP_FOLDER"
+          
+          # 3. Copy the app into the Payload folder
+          cp -r "$APP_FOLDER" Payload/
+          
+          # 4. Zip it into an IPA
+          zip -r Neuron-Unleashed.ipa Payload
+
+      - name: Upload Finished IPA
         uses: actions/upload-artifact@v4
         with:
           name: Neuron-Unsigned-IPA
-          path: Neuron-Unsigned.ipa
+          path: Neuron-Unleashed.ipa
