@@ -1,59 +1,51 @@
-name: Sonic Unleashed Recomp iOS (Total Fix)
-
-on:
-  workflow_dispatch:
+name: Unsigned Unleashed Build
+on: [push, pull_request, workflow_dispatch]
 
 jobs:
-  build:
+  build_unsigned:
     runs-on: macos-latest
     steps:
-      - name: 1. Pulling Code (Kills Exit 128)
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 2. Setup Tools
-        run: brew install cmake ninja
-
-      - name: 3. Phrase 2 & 3 (Forced Pass)
-        continue-on-error: true
+      - name: Install Dependencies
         run: |
-          echo "Starting Asset & Code Gen..."
-          # These steps usually need your own ROM files to work perfectly
-          # We skip failure here so Phrase 4 can still try to build the app
-          chmod +x ./extract_assets.sh || true
-          ./extract_assets.sh || true
+          brew install cmake ninja
+          # Ensure we are using a modern Xcode version
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      - name: 4. Phrase 4 - The Error Killer (Fixes 65 & 66)
+      # Fix for Phase 4: Pre-creating directories sometimes prevents Error 1
+      - name: Pre-Build Setup
         run: |
-          # This command finds the project file automatically so Exit 66 dies
-          PROJECT_FILE=$(find . -name "*.xcodeproj" | head -n 1)
-          SCHEME_NAME=$(xcodebuild -list -project "$PROJECT_FILE" | grep -m 1 "Targets:" -A 2 | tail -n 1 | xargs)
-          
-          echo "Found Project: $PROJECT_FILE"
-          echo "Found Scheme: $SCHEME_NAME"
+          mkdir -p build
+          mkdir -p output
 
-          xcodebuild build \
-            -project "$PROJECT_FILE" \
-            -scheme "$SCHEME_NAME" \
-            -configuration Release \
+      - name: Archive Unsigned
+        run: |
+          xcodebuild archive \
+            -project "UnleashedRecompiOS.xcodeproj" \
+            -scheme "UnleashedRecompiOS" \
+            -archivePath ./build/Unleashed.xcarchive \
             -sdk iphoneos \
+            -configuration Release \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO \
+            ENTITLEMENTS_REQUIRED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
             COMPILER_INDEX_STORE_ENABLE=NO
 
-      - name: 5. Phrase 5 - Create IPA
+      # This converts the .xcarchive into a folder you can actually use
+      - name: Prepare Output
         run: |
-          mkdir -p Payload
-          # Finds the built app and puts it in the zip
-          find . -name "*.app" -exec cp -r {} Payload/ \;
-          zip -r SonicUnleashed.ipa Payload
+          mv ./build/Unleashed.xcarchive/Products/Applications/*.app ./output/ 2>/dev/null || cp -R ./build/Unleashed.xcarchive ./output/
           
-      - name: 6. Upload IPA to iPad
+      - name: Upload Unsigned App
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-Build
-          path: SonicUnleashed.ipa
+          name: Unleashed-Unsigned
+          path: ./output/
