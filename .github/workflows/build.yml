@@ -14,17 +14,11 @@ steps:
 
   - run: rm -rf ~/Library/Developer/Xcode/DerivedData
 
-  - name: Find project
-    id: proj
-    run: echo "proj=$(find . -name '*.xcodeproj' | head -n 1)" >> $GITHUB_OUTPUT
+  - name: Build directly
+    run: xcodebuild -scheme "$(xcodebuild -list | awk '/Schemes:/ {getline; print}' | xargs)" -sdk iphoneos CODE_SIGNING_ALLOWED=NO build
 
-  - name: Find scheme
-    id: scheme
-    run: echo "scheme=$(xcodebuild -list -project ${{ steps.proj.outputs.proj }} | awk '/Schemes:/ {getline; print}' | xargs)" >> $GITHUB_OUTPUT
-
-  - run: xcodebuild -project "${{ steps.proj.outputs.proj }}" -scheme "${{ steps.scheme.outputs.scheme }}" -sdk iphoneos CODE_SIGNING_ALLOWED=NO build
-
-  - run: |
+  - name: Make IPA
+    run: |
       mkdir Payload
       APP=$(find ~/Library/Developer/Xcode/DerivedData -name "*.app" | head -n 1)
       cp -r "$APP" Payload
