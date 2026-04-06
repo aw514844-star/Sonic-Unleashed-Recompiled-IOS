@@ -7,15 +7,12 @@ jobs:
 build:
 runs-on: macos-13
 steps:
-- name: Checkout
-uses: actions/checkout@v4
+- uses: actions/checkout@v4
 
 ```
-  - name: Set Xcode
-    run: sudo xcode-select -s /Applications/Xcode_15.4.app
+  - run: sudo xcode-select -s /Applications/Xcode_15.4.app
 
-  - name: Clean
-    run: rm -rf ~/Library/Developer/Xcode/DerivedData
+  - run: rm -rf ~/Library/Developer/Xcode/DerivedData
 
   - name: Find project
     id: proj
@@ -23,29 +20,18 @@ uses: actions/checkout@v4
 
   - name: Find scheme
     id: scheme
-    run: |
-      SCHEME=$(xcodebuild -list -project "${{ steps.proj.outputs.proj }}" | awk '/Schemes:/ {getline; print}' | xargs)
-      echo "scheme=$SCHEME" >> $GITHUB_OUTPUT
+    run: echo "scheme=$(xcodebuild -list -project ${{ steps.proj.outputs.proj }} | awk '/Schemes:/ {getline; print}' | xargs)" >> $GITHUB_OUTPUT
 
-  - name: Build (no signing)
-    run: |
-      xcodebuild \
-        -project "${{ steps.proj.outputs.proj }}" \
-        -scheme "${{ steps.scheme.outputs.scheme }}" \
-        -sdk iphoneos \
-        CODE_SIGNING_ALLOWED=NO \
-        build
+  - run: xcodebuild -project "${{ steps.proj.outputs.proj }}" -scheme "${{ steps.scheme.outputs.scheme }}" -sdk iphoneos CODE_SIGNING_ALLOWED=NO build
 
-  - name: Make IPA
-    run: |
+  - run: |
       mkdir Payload
       APP=$(find ~/Library/Developer/Xcode/DerivedData -name "*.app" | head -n 1)
-      cp -r "$APP" Payload/
+      cp -r "$APP" Payload
       cd Payload
       zip -r ../app.ipa .
 
-  - name: Upload IPA
-    uses: actions/upload-artifact@v4
+  - uses: actions/upload-artifact@v4
     with:
       name: ipa
       path: app.ipa
