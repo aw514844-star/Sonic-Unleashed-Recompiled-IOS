@@ -1,39 +1,46 @@
-name: Build IPA
-
-on:
-workflow_dispatch:
+name: Build Unsigned IPA
+on: [workflow_dispatch]
 
 jobs:
-build:
-runs-on: macos-13
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-```
-steps:
-  - name: Checkout
-    uses: actions/checkout@v4
-    with:
-      submodules: recursive
+      - name: Install Dependencies
+        run: |
+          brew install cmake ninja
+          
+      - name: Setup iOS Toolchain
+        run: |
+          # This ensures the build environment targets iOS
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-  - name: Set Xcode
-    run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - name: Configure and Build
+        run: |
+          mkdir build
+          cd build
+          # We use -DCODE_SIGNING_ALLOWED=NO to skip the Apple ID requirement
+          cmake .. -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCODE_SIGNING_ALLOWED=NO \
+            -DCODE_SIGN_IDENTITY="" \
+            -DCODE_SIGNING_REQUIRED=NO
+          ninja
 
-  - name: Clean
-    run: rm -rf ~/Library/Developer/Xcode/DerivedData
-
-  - name: Build
-    run: xcodebuild -scheme "$(xcodebuild -list | awk '/Schemes:/ {getline; print}' | xargs)" -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
-
-  - name: Create IPA
-    run: |
-      mkdir Payload
-      APP=$(find ~/Library/Developer/Xcode/DerivedData -name "*.app" | head -n 1)
-      cp -r "$APP" Payload
-      cd Payload
-      zip -r ../app.ipa .
-
-  - name: Upload
-    uses: actions/upload-artifact@v4
-    with:
-      name: ipa
-      path: app.ipa
-```
+      - name: Package as IPA
+        run: |
+          mkdir -p Payload
+          # Change 'Neuron.app' to the actual name of the generated app folder
+          cp -r build/Neuron.app Payload/
+          zip -r Neuron-Unsigned.ipa Payload
+          
+      - name: Upload Result
+        uses: actions/upload-artifact@v4
+        with:
+          name: Neuron-Unsigned-IPA
+          path: Neuron-Unsigned.ipa
