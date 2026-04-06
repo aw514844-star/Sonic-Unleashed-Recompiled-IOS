@@ -1,0 +1,52 @@
+name: Build IPA
+
+on:
+workflow_dispatch:
+
+jobs:
+build:
+runs-on: macos-13
+steps:
+- name: Checkout
+uses: actions/checkout@v4
+
+```
+  - name: Set Xcode
+    run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+  - name: Clean
+    run: rm -rf ~/Library/Developer/Xcode/DerivedData
+
+  - name: Find project
+    id: proj
+    run: echo "proj=$(find . -name '*.xcodeproj' | head -n 1)" >> $GITHUB_OUTPUT
+
+  - name: Find scheme
+    id: scheme
+    run: |
+      SCHEME=$(xcodebuild -list -project "${{ steps.proj.outputs.proj }}" | awk '/Schemes:/ {getline; print}' | xargs)
+      echo "scheme=$SCHEME" >> $GITHUB_OUTPUT
+
+  - name: Build (no signing)
+    run: |
+      xcodebuild \
+        -project "${{ steps.proj.outputs.proj }}" \
+        -scheme "${{ steps.scheme.outputs.scheme }}" \
+        -sdk iphoneos \
+        CODE_SIGNING_ALLOWED=NO \
+        build
+
+  - name: Make IPA
+    run: |
+      mkdir Payload
+      APP=$(find ~/Library/Developer/Xcode/DerivedData -name "*.app" | head -n 1)
+      cp -r "$APP" Payload/
+      cd Payload
+      zip -r ../app.ipa .
+
+  - name: Upload IPA
+    uses: actions/upload-artifact@v4
+    with:
+      name: ipa
+      path: app.ipa
+```
