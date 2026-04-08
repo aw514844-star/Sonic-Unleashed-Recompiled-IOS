@@ -1,51 +1,51 @@
-name: Unsigned Unleashed Build
-on: [push, pull_request, workflow_dispatch]
+name: Flawless Sonic Unleashed iOS Build
+on: 
+  workflow_dispatch: # Allows you to start the build manually with a button
 
 jobs:
-  build_unsigned:
-    runs-on: macos-latest
+  build-port:
+    runs-on: macos-14 # This uses the M1/M2 Cloud Mac for fastest speeds
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
-          fetch-depth: 0
+          submodules: recursive # Essential for pulling in engine dependencies
 
-      - name: Install Dependencies
+      - name: Setup Build Environment
         run: |
-          brew install cmake ninja
-          # Ensure we are using a modern Xcode version
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          brew install cmake ninja sdl2
+          sudo xcode-select -s /Applications/Xcode_15.2.app
 
-      # Fix for Phase 4: Pre-creating directories sometimes prevents Error 1
-      - name: Pre-Build Setup
+      - name: Configure for iOS (No Signing)
+        # We set CODE_SIGNING_ALLOWED to NO so the build doesn't crash 
+        # looking for certificates.
         run: |
-          mkdir -p build
-          mkdir -p output
+          mkdir build
+          cd build
+          cmake .. -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES="arm64" \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_ENTITLEMENTS="" \
+            -DCMAKE_XCODE_ATTRIBUTE_BITCODE_ENABLED=NO
 
-      - name: Archive Unsigned
+      - name: Compile Game Engine
         run: |
-          xcodebuild archive \
-            -project "UnleashedRecompiOS.xcodeproj" \
-            -scheme "UnleashedRecompiOS" \
-            -archivePath ./build/Unleashed.xcarchive \
-            -sdk iphoneos \
-            -configuration Release \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=NO \
-            ENTITLEMENTS_REQUIRED=NO \
-            CODE_SIGN_ENTITLEMENTS="" \
-            COMPILER_INDEX_STORE_ENABLE=NO
+          cd build
+          ninja
 
-      # This converts the .xcarchive into a folder you can actually use
-      - name: Prepare Output
+      - name: Prepare Unsigned IPA
         run: |
-          mv ./build/Unleashed.xcarchive/Products/Applications/*.app ./output/ 2>/dev/null || cp -R ./build/Unleashed.xcarchive ./output/
-          
-      - name: Upload Unsigned App
+          mkdir -p build/Payload
+          # This moves the compiled app into the standard iOS structure
+          cp -r build/*.app build/Payload/
+          cd build
+          zip -r SonicUnleashed_Unsigned.ipa Payload/
+
+      - name: Upload Finished Build
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Unsigned
-          path: ./output/
+          name: Sonic-Unleashed-iOS-Package
+          path: build/SonicUnleashed_Unsigned.ipa
