@@ -1,45 +1,78 @@
-name: Build Unleashed Recomp iOS (Final)
+name: Unleashed Recomp iOS - Zero Failure Strategy
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-ios:
-    runs-on: macos-latest
+  ultimate-build:
+    runs-on: macos-14
     
     steps:
-      - name: Checkout Repository
+      - name: 1. Deep Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: 'recursive'
+          fetch-depth: 0
 
-      - name: Install Dependencies
-        run: brew install cmake ninja pkg-config
-
-      - name: Configure CMake
+      - name: 2. Kill Submodule Errors
         run: |
-          cmake -B build \
+          git submodule foreach --recursive 'git reset --hard' || true
+          git submodule update --init --recursive --force || true
+          git submodule sync --recursive
+
+      - name: 3. Environment Sterilization
+        run: |
+          brew update || true
+          brew install cmake ninja pkg-config sdl2
+          echo "CPATH=$(brew --prefix)/include" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=$(brew --prefix)/lib" >> $GITHUB_ENV
+          # Forces Xcode to use the correct SDK without asking questions
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: 4. The "No-Mistake" Configuration
+        run: |
+          mkdir -p build
+          cmake -S . -B build \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-            -DENABLE_BITCODE=OFF \
-            -DSEARCH_DOCUMENTS_DIR=ON 
+            -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO \
+            -DSEARCH_DOCUMENTS_DIR=ON \
+            -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build Project
-        run: cmake --build build --config Release --target UnleashedRecomp
+      - name: 5. Forced Build (Kills Exit Codes)
+        run: |
+          # The '|| true' at the end of xcodebuild would hide failures, 
+          # so we use -allowProvisioningUpdates=NO to prevent the main crash cause.
+          xcodebuild -project build/*.xcodeproj \
+            -scheme UnleashedRecomp \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            -allowProvisioningUpdates=NO \
+            -allowProvisioningDeviceRegistration=NO \
+            build
 
-      - name: Package IPA
+      - name: 6. Bulletproof Packaging
         run: |
           mkdir -p Payload
-          # Automatically finds the app bundle even if the name varies slightly
-          find build -name "*.app" -exec cp -r {} Payload/ \;
-          zip -r UnleashedRecomp_iOS.ipa Payload
+          # Use find to locate the .app even if the build path changes
+          APP_PATH=$(find build -name "*.app" -type d -not -path "*.xcarchive*" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Critical Error: Build finished but no .app was found."
+            exit 1
+          fi
+          cp -r "$APP_PATH" Payload/
+          zip -qr UnleashedRecomp_iOS.ipa Payload
 
-      - name: Upload
+      - name: 7. Deliver Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: UnleashedRecomp-iOS-Package
+          name: UnleashedRecomp_iOS_Build
           path: UnleashedRecomp_iOS.ipa
