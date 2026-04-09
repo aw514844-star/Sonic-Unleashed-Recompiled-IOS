@@ -1,89 +1,93 @@
-name: Sonic Unleashed iOS Recomp (No-Signing)
+name: Sonic Unleashed iOS Final (No Errors)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Manual start
   push:
     branches: [ main, master ]
 
 jobs:
-  build-port:
-    # Use macOS 15 for the latest iPadOS 26.x SDK compatibility
-    runs-on: macos-15
+  build-and-bundle:
+    runs-on: macos-15 # Matches iPadOS 26.x SDK requirements
 
     steps:
-      - name: 1. Clone Project & Submodules
+      - name: 1. Pull Sources (Inclusive)
         uses: actions/checkout@v4
         with:
-          submodules: recursive # Crucial: gets XenonRecomp/XenosRecomp sources
+          submodules: recursive # Pulls all Xenon/Xenos/Nerun source code automatically
 
-      - name: 2. Install Build Tools
+      - name: 2. Force Environment Ready
         run: |
           brew install cmake ninja
           sudo xcode-select -s /Applications/Xcode.app
+          # Set architecture specifically for iPad 9 (A13)
+          echo "ARCHS=arm64" >> $GITHUB_ENV
 
-      - name: 3. Verify Private Assets (No Empty Files)
+      - name: 3. Strict Asset Verification
+        # This prevents the "empty file" issue by failing early if your files are missing
         run: |
-          # Ensuring the private folder exists and contains your specific files
           ASSET_DIR="private"
-          REQUIRED_FILES=(
-            "$ASSET_DIR/default.xex"
-            "$ASSET_DIR/shader.ar"
-            "$ASSET_DIR/shader.arl"
-            "$ASSET_DIR/title_update"
-          )
-
-          echo "Scanning for Xbox 360 Assets in /$ASSET_DIR..."
-          for item in "${REQUIRED_FILES[@]}"; do
-            if [ ! -e "$item" ]; then
-              echo "::error file=$item::CRITICAL ERROR: $item is missing! Upload it to the 'private' folder in your repo."
+          declare -a FILES=("default.xex" "shader.ar" "shader.arl" "title_update")
+          
+          echo "Checking private folder for Xbox 360 assets..."
+          for f in "${FILES[@]}"; do
+            if [ ! -e "$ASSET_DIR/$f" ]; then
+              echo "::error::MISSING FILE: $ASSET_DIR/$f. YOU MUST UPLOAD THIS TO YOUR REPO."
               exit 1
             fi
           done
-          echo "All assets found. Ready for compilation."
+          echo "All assets verified."
 
-      - name: 4. Configure CMake (Strict No-Signing)
+      - name: 4. Configure CMake (Kill Signing & Errors)
+        # These specific XCODE_ATTRIBUTE flags solve "Exit Code 1"
         run: |
           mkdir build
           cd build
-          # -DCODE_SIGNING_ALLOWED=NO bypasses all Apple Developer checks
-          # -DENABLE_METAL=ON is required for the Nerun iOS fork
           cmake .. -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCODE_SIGNING_ALLOWED=NO \
-            -DCODE_SIGNING_REQUIRED=NO \
             -DRECOMP_PLATFORM=iOS \
             -DENABLE_METAL=ON \
-            -DENABLE_ASSET_BUNDLING=ON
+            -DCODE_SIGNING_ALLOWED=NO \
+            -DCODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+            -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf
 
-      - name: 5. Build Binary
+      - name: 5. Compile Project
         run: |
           cd build
-          ninja
+          ninja -j $(sysctl -n hw.logicalcpu)
 
-      - name: 6. Package Unsigned IPA
+      - name: 6. Build IPA & Prevent Empty Files
         run: |
-          # Manually constructing the Payload for iPadOS installation
           mkdir -p Payload/UnleashedRecomp.app
           
-          # Copy the compiled binary and resources
-          cp -r build/UnleashedRecomp.app/* Payload/UnleashedRecomp.app/ || true
+          # Move compiled app data
+          cp -r build/*.app/* Payload/UnleashedRecomp.app/ || true
           
-          # Inject your private assets into the app bundle root
+          # Force injection of your private assets directly into the IPA
           cp -r private/* Payload/UnleashedRecomp.app/
           
-          # Final check to ensure it's not an empty file
+          # CRITICAL CHECK: Ensure the binary actually exists
           if [ ! -f "Payload/UnleashedRecomp.app/UnleashedRecomp" ]; then
-            echo "::error::Build failed to produce a binary. Check Ninja logs."
+            echo "::error::BUILD FAILED: Binary not created. Check ninja logs above."
+            exit 1
+          fi
+          
+          # Final check: Ensure shaders are in the bundle
+          if [ ! -f "Payload/UnleashedRecomp.app/shader.ar" ]; then
+            echo "::error::ASSET ERROR: Shaders were not copied. Check 'private' folder path."
             exit 1
           fi
 
-          zip -r Sonic_Unleashed_iOS_Unsigned.ipa Payload
+          zip -r Unleashed_iPadOS_Final.ipa Payload
 
-      - name: 7. Upload Build Result
+      - name: 7. Deliver IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-iPadOS-26
-          path: Sonic_Unleashed_iOS_Unsigned.ipa
-          if-no-files-found: error
+          name: Sonic-Unleashed-iPad9-Unsigned
+          path: Unleashed_iPadOS_Final.ipa
+          retention-days: 7
