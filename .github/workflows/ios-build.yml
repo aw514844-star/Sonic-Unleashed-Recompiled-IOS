@@ -1,4 +1,4 @@
-name: Unleashed Recomp iOS - Titanium Fix
+name: Unleashed Recomp iOS - Search & Build
 
 on:
   workflow_dispatch:
@@ -13,52 +13,48 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 0
 
-      - name: 2. Force Submodule Injection
-        # This fixes Exit Code 1 by ensuring the 'Source' folder isn't empty
+      - name: 2. Locate Project File
+        # This finds the directory containing CMakeLists.txt automatically
         run: |
-          git submodule sync --recursive
-          git submodule update --init --recursive --force
+          PROJ_DIR=$(find . -name "CMakeLists.txt" -not -path "./build/*" -print -quit | xargs dirname)
+          echo "PROJECT_ROOT=$PROJ_DIR" >> $GITHUB_ENV
+          echo "Found project in: $PROJ_DIR"
 
       - name: 3. Setup Tools
         run: |
           brew install cmake ninja pkg-config sdl2
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      - name: 4. The Absolute Configuration
-        # We use -S . and -B build to explicitly define paths
-        # This prevents CMake from getting lost in subdirectories
+      - name: 4. The Smart Configuration
         run: |
-          cmake -S . -B build \
+          mkdir -p build
+          # We use the PROJECT_ROOT found in Step 2
+          cmake -S ${{ env.PROJECT_ROOT }} -B build \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
             -DSEARCH_DOCUMENTS_DIR=ON \
             -DCMAKE_BUILD_TYPE=Release
 
-      - name: 5. Hard Build
-        # No '|| true' here. We need a real build.
+      - name: 5. Build
         run: |
           cmake --build build --config Release --target UnleashedRecomp -- -allowProvisioningUpdates=NO
 
-      - name: 6. Real Packaging
+      - name: 6. Package & Size Check
         run: |
           mkdir -p Payload
-          # Search for the .app folder
           APP_PATH=$(find build -name "*.app" -type d | head -n 1)
-          if [ -z "$APP_PATH" ]; then
-            echo "FAILED: No app bundle found. Check Step 5 logs."
-            exit 1
-          fi
+          if [ -z "$APP_PATH" ]; then exit 1; fi
           cp -r "$APP_PATH" Payload/
           zip -qr UnleashedRecomp_iOS.ipa Payload
-          # Verify file size
-          ls -lh UnleashedRecomp_iOS.ipa
+          # This prints the size in the logs so you know if it's real
+          du -sh UnleashedRecomp_iOS.ipa
 
       - name: 7. Upload
         uses: actions/upload-artifact@v4
         with:
-          name: UnleashedRecomp-iOS-Final
+          name: UnleashedRecomp-iOS
           path: UnleashedRecomp_iOS.ipa
