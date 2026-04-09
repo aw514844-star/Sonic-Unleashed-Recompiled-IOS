@@ -1,0 +1,45 @@
+name: Build Unleashed Recomp iOS (Final)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Dependencies
+        run: brew install cmake ninja pkg-config
+
+      - name: Configure CMake
+        run: |
+          cmake -B build \
+            -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DENABLE_BITCODE=OFF \
+            -DSEARCH_DOCUMENTS_DIR=ON 
+
+      - name: Build Project
+        run: cmake --build build --config Release --target UnleashedRecomp
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          # Automatically finds the app bundle even if the name varies slightly
+          find build -name "*.app" -exec cp -r {} Payload/ \;
+          zip -r UnleashedRecomp_iOS.ipa Payload
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnleashedRecomp-iOS-Package
+          path: UnleashedRecomp_iOS.ipa
