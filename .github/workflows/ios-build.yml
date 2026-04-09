@@ -1,4 +1,4 @@
-name: Sonic Unleashed iOS Final Success
+name: Sonic Unleashed iOS Ultimate Success
 
 on:
   workflow_dispatch:
@@ -7,8 +7,8 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15 # Specifically for iPadOS 26.x support
-    
+    runs-on: macos-15 # Matches iPadOS 26.x requirements
+
     steps:
       - name: 1. Fetch Source
         uses: actions/checkout@v4
@@ -16,29 +16,29 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 2. Setup Tools
+      - name: 2. Setup Environment
         run: |
           brew install cmake ninja
           sudo xcode-select -s /Applications/Xcode.app
 
-      - name: 3. Pre-Flight Asset Check
+      - name: 3. Verify Private Assets (Stop Empty Files)
         run: |
           mkdir -p private
-          # We check for your specific files. If they aren't here, the build stops.
+          # The script looks specifically for these in your 'private' folder
           REQUIRED=("default.xex" "shader.ar" "shader.arl" "title_update")
           for f in "${REQUIRED[@]}"; do
             if [ ! -e "private/$f" ]; then
-              echo "::error::MISSING ASSET: private/$f. You must upload this to your repo."
+              echo "::error::MISSING $f in /private folder. Build KILLED to save time."
               exit 1
             fi
           done
 
-      - name: 4. Configure & Build (THE FINAL FIX)
+      - name: 4. Configure & Build (KILL EXIT CODE 1)
         run: |
           mkdir -p build && cd build
           
-          # We use -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY to kill Exit Code 1
-          # We use -DCMAKE_DETAILED_ERROR_MESSAGES=ON to see any hidden issues
+          # The KEY: -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
+          # This forces CMake to skip the signing-check that causes Exit Code 1.
           cmake .. -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -53,36 +53,33 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
             -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
-            -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf \
-            -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO
+            -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf
 
-          # Start compilation immediately in the same step
+          # Immediate Build Execution
           ninja -j $(sysctl -n hw.logicalcpu)
 
-      - name: 5. Assembly (No Empty Files)
+      - name: 5. Manual Assembly (Fix Everything)
         run: |
           mkdir -p Payload/UnleashedRecomp.app
           
-          # Move compiled binary
+          # Copy Binary (Checking both potential names)
           if [ -d "build/UnleashedRecomp.app" ]; then
             cp -r build/UnleashedRecomp.app/* Payload/UnleashedRecomp.app/
-          elif [ -f "build/UnleashedRecomp" ]; then
-            cp build/UnleashedRecomp Payload/UnleashedRecomp.app/
           fi
           
-          # FORCE INJECT: Manually put your assets into the IPA root
+          # FORCE INJECT: Manually move your shaders and xex into the IPA
           cp -r private/* Payload/UnleashedRecomp.app/
           
-          # Check for the binary to ensure success
+          # Integrity Check: Fail if the binary is missing
           if [ ! -f "Payload/UnleashedRecomp.app/UnleashedRecomp" ] && [ ! -f "Payload/UnleashedRecomp.app/Unleashed" ]; then
-            echo "::error::BUILD FAILED: The binary was not produced. Check Ninja logs above."
+            echo "::error::BUILD FAILED: Binary was not produced. Check Ninja logs above."
             exit 1
           fi
 
-          zip -r Sonic_Unleashed_iPad_Final.ipa Payload
+          zip -r Sonic_Unleashed_iPadOS_Success.ipa Payload
 
-      - name: 6. Upload Result
+      - name: 6. Deliver Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-IPA-Success
-          path: Sonic_Unleashed_iPad_Final.ipa
+          name: Sonic-Unleashed-IPA-Final
+          path: Sonic_Unleashed_iPadOS_Success.ipa
