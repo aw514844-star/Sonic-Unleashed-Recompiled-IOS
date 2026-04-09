@@ -1,4 +1,4 @@
-name: Sonic Unleashed iOS Ultimate Success
+name: Sonic Unleashed iOS Final Success
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15 # Matches iPadOS 26.x requirements
+    runs-on: macos-15 # Specifically for iPadOS 26.x / Apple Silicon
 
     steps:
       - name: 1. Fetch Source
@@ -16,29 +16,29 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 2. Setup Environment
+      - name: 2. Toolchain Setup
         run: |
           brew install cmake ninja
           sudo xcode-select -s /Applications/Xcode.app
 
-      - name: 3. Verify Private Assets (Stop Empty Files)
+      - name: 3. Asset Lock (Prevents Empty Game)
         run: |
           mkdir -p private
           # The script looks specifically for these in your 'private' folder
           REQUIRED=("default.xex" "shader.ar" "shader.arl" "title_update")
           for f in "${REQUIRED[@]}"; do
             if [ ! -e "private/$f" ]; then
-              echo "::error::MISSING $f in /private folder. Build KILLED to save time."
+              echo "::error::CRITICAL: private/$f is missing! Build KILLED to avoid empty output."
               exit 1
             fi
           done
 
-      - name: 4. Configure & Build (KILL EXIT CODE 1)
+      - name: 4. Build Engine (Kill Exit Code 1)
         run: |
           mkdir -p build && cd build
           
-          # The KEY: -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
-          # This forces CMake to skip the signing-check that causes Exit Code 1.
+          # This 'Nuclear' configuration stops CMake from testing the compiler
+          # This is the ONLY way to bypass the Exit Code 1 signing crash
           cmake .. -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -55,31 +55,31 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
             -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf
 
-          # Immediate Build Execution
+          # Start compilation immediately
           ninja -j $(sysctl -n hw.logicalcpu)
 
-      - name: 5. Manual Assembly (Fix Everything)
+      - name: 5. Manual Assembly (No Empty Files)
         run: |
           mkdir -p Payload/UnleashedRecomp.app
           
-          # Copy Binary (Checking both potential names)
+          # Move the compiled app content
           if [ -d "build/UnleashedRecomp.app" ]; then
             cp -r build/UnleashedRecomp.app/* Payload/UnleashedRecomp.app/
           fi
           
-          # FORCE INJECT: Manually move your shaders and xex into the IPA
+          # MANUALLY INJECT ASSETS: This ensures your xex and shaders are inside
           cp -r private/* Payload/UnleashedRecomp.app/
           
-          # Integrity Check: Fail if the binary is missing
+          # FINAL VERIFICATION: Fail if the game binary wasn't actually made
           if [ ! -f "Payload/UnleashedRecomp.app/UnleashedRecomp" ] && [ ! -f "Payload/UnleashedRecomp.app/Unleashed" ]; then
-            echo "::error::BUILD FAILED: Binary was not produced. Check Ninja logs above."
+            echo "::error::FAILURE: Binary not produced. Check Ninja logs above for C++ errors."
             exit 1
           fi
 
-          zip -r Sonic_Unleashed_iPadOS_Success.ipa Payload
+          zip -r Sonic_Unleashed_iPad_Final.ipa Payload
 
       - name: 6. Deliver Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Sonic-Unleashed-IPA-Final
-          path: Sonic_Unleashed_iPadOS_Success.ipa
+          path: Sonic_Unleashed_iPad_Final.ipa
