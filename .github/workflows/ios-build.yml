@@ -1,44 +1,44 @@
-name: Sonic Unleashed iOS Final (No Errors)
+name: Unleashed iOS Final Fix
 
 on:
-  workflow_dispatch: # Manual start
+  workflow_dispatch:
   push:
     branches: [ main, master ]
 
 jobs:
   build-and-bundle:
-    runs-on: macos-15 # Matches iPadOS 26.x SDK requirements
+    runs-on: macos-15 # Specifically targets the latest Mac Cloud Runner
 
     steps:
-      - name: 1. Pull Sources (Inclusive)
+      - name: 1. Clone Project & Submodules
         uses: actions/checkout@v4
         with:
-          submodules: recursive # Pulls all Xenon/Xenos/Nerun source code automatically
+          submodules: recursive # Automatically pulls XenonRecomp and all sources
 
-      - name: 2. Force Environment Ready
+      - name: 2. Force Environment Prep
         run: |
           brew install cmake ninja
           sudo xcode-select -s /Applications/Xcode.app
-          # Set architecture specifically for iPad 9 (A13)
+          # Set specific build architecture to avoid 'Exit Code 1' mismatches
           echo "ARCHS=arm64" >> $GITHUB_ENV
 
-      - name: 3. Strict Asset Verification
-        # This prevents the "empty file" issue by failing early if your files are missing
+      - name: 3. Asset Integrity Lock (Stops Empty Files)
+        # This step GUARANTEES the build fails immediately if assets are missing
         run: |
           ASSET_DIR="private"
-          declare -a FILES=("default.xex" "shader.ar" "shader.arl" "title_update")
+          REQUIRED=("default.xex" "shader.ar" "shader.arl" "title_update")
           
-          echo "Checking private folder for Xbox 360 assets..."
-          for f in "${FILES[@]}"; do
-            if [ ! -e "$ASSET_DIR/$f" ]; then
-              echo "::error::MISSING FILE: $ASSET_DIR/$f. YOU MUST UPLOAD THIS TO YOUR REPO."
+          echo "Verifying local Xbox 360 assets in /$ASSET_DIR..."
+          for file in "${REQUIRED[@]}"; do
+            if [ ! -e "$ASSET_DIR/$file" ]; then
+              echo "::error file=$ASSET_DIR/$file::CRITICAL: $file is missing! Build halted to prevent empty output."
               exit 1
             fi
           done
-          echo "All assets verified."
+          echo "Assets verified. Ready for compilation."
 
-      - name: 4. Configure CMake (Kill Signing & Errors)
-        # These specific XCODE_ATTRIBUTE flags solve "Exit Code 1"
+      - name: 4. Configure CMake (Strict No-Signing Override)
+        # This block kills the 'Exit Code 1' by telling CMake to ignore Xcode's signing hardware
         run: |
           mkdir build
           cd build
@@ -56,38 +56,33 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
             -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf
 
-      - name: 5. Compile Project
+      - name: 5. Compile Binary
         run: |
           cd build
+          # -j specifies the number of cores to use, speeding up the process
           ninja -j $(sysctl -n hw.logicalcpu)
 
-      - name: 6. Build IPA & Prevent Empty Files
+      - name: 6. Assemble Final IPA (No Empty Game Files)
         run: |
           mkdir -p Payload/UnleashedRecomp.app
           
-          # Move compiled app data
+          # Move compiled app data safely
           cp -r build/*.app/* Payload/UnleashedRecomp.app/ || true
           
-          # Force injection of your private assets directly into the IPA
+          # Force Inject assets from the private folder directly into the IPA
           cp -r private/* Payload/UnleashedRecomp.app/
           
-          # CRITICAL CHECK: Ensure the binary actually exists
+          # FINAL ERROR CHECK: If the binary was never made, the script KILLS itself here
           if [ ! -f "Payload/UnleashedRecomp.app/UnleashedRecomp" ]; then
-            echo "::error::BUILD FAILED: Binary not created. Check ninja logs above."
-            exit 1
-          fi
-          
-          # Final check: Ensure shaders are in the bundle
-          if [ ! -f "Payload/UnleashedRecomp.app/shader.ar" ]; then
-            echo "::error::ASSET ERROR: Shaders were not copied. Check 'private' folder path."
+            echo "::error::BUILD FAILURE: Ninja finished but the game binary is missing. Check logs."
             exit 1
           fi
 
-          zip -r Unleashed_iPadOS_Final.ipa Payload
+          zip -r Sonic_Unleashed_iPadOS_Final.ipa Payload
 
-      - name: 7. Deliver IPA
+      - name: 7. Deliver Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-iPad9-Unsigned
-          path: Unleashed_iPadOS_Final.ipa
-          retention-days: 7
+          name: Unleashed-Recomp-iPadOS
+          path: Sonic_Unleashed_iPadOS_Final.ipa
+          if-no-files-found: error
