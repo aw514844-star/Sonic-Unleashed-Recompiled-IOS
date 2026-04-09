@@ -1,4 +1,4 @@
-name: Unleashed Recomp iOS - Non-Empty Guaranteed
+name: Unleashed Recomp iOS - Total Fix
 
 on:
   workflow_dispatch:
@@ -7,38 +7,35 @@ jobs:
   build:
     runs-on: macos-14
     steps:
-      - name: 1. Deep Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: 'recursive'
-          fetch-depth: 0
-
-      - name: 2. Force Submodule Download & Verification
+      - name: 1. Force-Fetch All Source Code
+        # This manually pulls the code and submodules to ensure NOTHING is missing
         run: |
-          # Sync and update submodules
-          git submodule sync --recursive
+          git init .
+          git remote add origin https://github.com/${{ github.repository }}
+          git fetch --depth 1 origin ${{ github.ref }}
+          git checkout FETCH_HEAD
           git submodule update --init --recursive --force
-          
-          # Verification: Check if common source directories are empty
-          # If 'Source' or 'Common' is empty, this fails here so we don't waste time on an empty IPA
-          if [ -z "$(ls -A .)" ]; then
-            echo "Error: Repository root is empty!"
-            exit 1
-          fi
 
-      - name: 3. Setup Dependencies
+      - name: 2. Setup Build Tools
         run: |
           brew install cmake ninja pkg-config sdl2
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      - name: 4. The Smart Configuration
+      - name: 3. Locate and Fix CMake Path
+        # This finds exactly where CMakeLists.txt is and sets the path
         run: |
-          # Find the directory containing CMakeLists.txt
-          PROJ_DIR=$(find . -name "CMakeLists.txt" -not -path "./build/*" -print -quit | xargs dirname)
-          echo "Building from: $PROJ_DIR"
-          
+          PROJ_PATH=$(find . -name "CMakeLists.txt" -not -path "./build/*" -print -quit)
+          if [ -z "$PROJ_PATH" ]; then
+            echo "ERROR: Could not find CMakeLists.txt. Your repository might be empty or wrong fork."
+            exit 1
+          fi
+          echo "PROJ_DIR=$(dirname "$PROJ_PATH")" >> $GITHUB_ENV
+
+      - name: 4. The Absolute Configuration
+        run: |
           mkdir -p build
-          cmake -S "$PROJ_DIR" -B build \
+          # We use the path found in Step 3
+          cmake -S "${{ env.PROJ_DIR }}" -B build \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -48,34 +45,29 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DSEARCH_DOCUMENTS_DIR=ON
 
-      - name: 5. Hard Build (No Skips)
+      - name: 5. Hard Build
         run: |
-          # We build the target. If this fails, the code itself has a bug.
           cmake --build build --config Release --target UnleashedRecomp -- -allowProvisioningUpdates=NO
 
-      - name: 6. Intelligent Packaging
+      - name: 6. Real IPA Packaging
         run: |
           mkdir -p Payload
-          # Find the .app bundle
           APP_PATH=$(find build -name "*.app" -type d | head -n 1)
-          
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Build finished but .app bundle is missing!"
+            echo "ERROR: Build finished but no app bundle was created."
             exit 1
           fi
-          
           cp -r "$APP_PATH" Payload/
           zip -qr UnleashedRecomp_iOS.ipa Payload
           
-          # Verification: Ensure the IPA is not a tiny empty file
-          FILESIZE=$(stat -f%z "UnleashedRecomp_iOS.ipa")
-          echo "Final IPA Size: $FILESIZE bytes"
-          if [ "$FILESIZE" -lt 1000000 ]; then
-            echo "ERROR: IPA is too small (under 1MB). Something went wrong!"
+          # Final check: Must be larger than 10MB to be a real app
+          SIZE=$(stat -f%z UnleashedRecomp_iOS.ipa)
+          if [ "$SIZE" -lt 10000000 ]; then
+            echo "ERROR: IPA is too small. It did not build correctly."
             exit 1
           fi
 
-      - name: 7. Upload
+      - name: 7. Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: UnleashedRecomp-iOS-Final
