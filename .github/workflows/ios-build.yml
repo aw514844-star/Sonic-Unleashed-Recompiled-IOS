@@ -1,4 +1,4 @@
-name: Unleashed Recomp iOS - Error Killer
+name: Unleashed Recomp iOS - Real Build
 
 on:
   workflow_dispatch:
@@ -7,27 +7,23 @@ jobs:
   build:
     runs-on: macos-14
     steps:
-      - name: 1. Clean Checkout
+      - name: 1. Checkout with Full History
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
           fetch-depth: 0
 
-      - name: 2. Force Repair Submodules
-        # Exit Code 1 usually happens here because of broken library links.
+      - name: 2. Force Submodule Download
         run: |
-          git submodule foreach --recursive git reset --hard
-          git submodule update --init --recursive --force || true
+          git submodule sync --recursive
+          git submodule update --init --recursive --force
 
-      - name: 3. Prepare Build Environment
+      - name: 3. Setup Tools
         run: |
           brew install cmake ninja pkg-config sdl2
-          # Force the Mac to use the latest Xcode path
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      - name: 4. Kill Configuration Errors
-        # We add '|| true' to the end of the command. 
-        # This prevents "Exit Code 1" from stopping the workflow.
+      - name: 4. Configure
         run: |
           mkdir -p build
           cmake . -B build \
@@ -37,27 +33,26 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-            -DSEARCH_DOCUMENTS_DIR=ON || true
+            -DSEARCH_DOCUMENTS_DIR=ON
 
-      - name: 5. Kill Build Errors
-        # Direct call to xcodebuild ignores CMake's picky error handling.
+      - name: 5. Build Engine (No Fake Success)
         run: |
-          xcodebuild -project build/*.xcodeproj \
-            -scheme UnleashedRecomp \
-            -configuration Release \
-            -sdk iphoneos \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            -allowProvisioningUpdates=NO || true
+          # We removed '|| true' here. If this fails, look at the error log.
+          cmake --build build --config Release --target UnleashedRecomp -- -allowProvisioningUpdates=NO
 
-      - name: 6. Force Package IPA
+      - name: 6. Package IPA
         run: |
           mkdir -p Payload
-          # Finds the engine file even if it moved
-          find build -name "*.app" -type d -exec cp -r {} Payload/ \;
+          # Verify if the app actually exists before zipping
+          APP_PATH=$(find build -name "*.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: App bundle not found! Build failed."
+            exit 1
+          fi
+          cp -r "$APP_PATH" Payload/
           zip -qr UnleashedRecomp_iOS.ipa Payload
 
-      - name: 7. Upload (The Green Checkmark)
+      - name: 7. Upload
         uses: actions/upload-artifact@v4
         with:
           name: UnleashedRecomp-iOS
