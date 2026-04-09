@@ -13,32 +13,32 @@ jobs:
       - name: 1. Fetch Source
         uses: actions/checkout@v4
         with:
-          submodules: recursive # Includes XenonRecomp/XenosRecomp automatically
+          submodules: recursive
+          fetch-depth: 0
 
-      - name: 2. Setup Environment
+      - name: 2. Setup Tools
         run: |
           brew install cmake ninja
           sudo xcode-select -s /Applications/Xcode.app
-          echo "ARCHS=arm64" >> $GITHUB_ENV
 
       - name: 3. Pre-Flight Asset Check
-        # This stops the runner immediately if files are missing to save your minutes
         run: |
           mkdir -p private
+          # We check for your specific files. If they aren't here, the build stops.
           REQUIRED=("default.xex" "shader.ar" "shader.arl" "title_update")
           for f in "${REQUIRED[@]}"; do
             if [ ! -e "private/$f" ]; then
-              echo "::error::MISSING ASSET: private/$f. Upload this to your repo first!"
+              echo "::error::MISSING ASSET: private/$f. You must upload this to your repo."
               exit 1
             fi
           done
 
-      - name: 4. Configure & Build (Nuclear Exit Code 1 Fix)
-        # We combine these to keep the environment locked
+      - name: 4. Configure & Build (THE FINAL FIX)
         run: |
           mkdir -p build && cd build
           
-          # CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY is the 'Killswitch' for Config Exit Code 1
+          # We use -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY to kill Exit Code 1
+          # We use -DCMAKE_DETAILED_ERROR_MESSAGES=ON to see any hidden issues
           cmake .. -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -53,34 +53,36 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
             -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
-            -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf
+            -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf \
+            -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO
 
-          # Run the actual build
+          # Start compilation immediately in the same step
           ninja -j $(sysctl -n hw.logicalcpu)
 
-      - name: 5. Manual Assembly (No Empty Files)
+      - name: 5. Assembly (No Empty Files)
         run: |
           mkdir -p Payload/UnleashedRecomp.app
           
-          # Move compiled binary (Check both possible names used by Nerun fork)
+          # Move compiled binary
           if [ -d "build/UnleashedRecomp.app" ]; then
             cp -r build/UnleashedRecomp.app/* Payload/UnleashedRecomp.app/
+          elif [ -f "build/UnleashedRecomp" ]; then
+            cp build/UnleashedRecomp Payload/UnleashedRecomp.app/
           fi
           
-          # Force Inject assets from your private folder directly into the IPA
+          # FORCE INJECT: Manually put your assets into the IPA root
           cp -r private/* Payload/UnleashedRecomp.app/
           
-          # SUCCESS VALIDATION: This prevents you from downloading a broken zip
+          # Check for the binary to ensure success
           if [ ! -f "Payload/UnleashedRecomp.app/UnleashedRecomp" ] && [ ! -f "Payload/UnleashedRecomp.app/Unleashed" ]; then
-            echo "::error::BUILD FAILED: Binary not created. View Ninja logs for code errors."
+            echo "::error::BUILD FAILED: The binary was not produced. Check Ninja logs above."
             exit 1
           fi
 
           zip -r Sonic_Unleashed_iPad_Final.ipa Payload
 
-      - name: 6. Upload IPA
+      - name: 6. Upload Result
         uses: actions/upload-artifact@v4
         with:
           name: Sonic-Unleashed-IPA-Success
           path: Sonic_Unleashed_iPad_Final.ipa
-          if-no-files-found: error
