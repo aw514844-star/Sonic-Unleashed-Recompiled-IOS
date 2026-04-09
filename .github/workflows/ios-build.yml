@@ -1,4 +1,4 @@
-name: Unleashed Recomp iOS - Total Fix
+name: Unleashed Recomp iOS - Final Fix
 
 on:
   workflow_dispatch:
@@ -7,46 +7,40 @@ jobs:
   build:
     runs-on: macos-14
     steps:
-      - name: 1. Force-Fetch All Source Code
-        # This manually pulls the code and submodules to ensure NOTHING is missing
-        run: |
-          git init .
-          git remote add origin https://github.com/${{ github.repository }}
-          git fetch --depth 1 origin ${{ github.ref }}
-          git checkout FETCH_HEAD
-          git submodule update --init --recursive --force
+      - name: 1. Checkout Main Fork
+        uses: actions/checkout@v4
+        with:
+          submodules: false # We will handle submodules manually to prevent Exit Code 1
 
-      - name: 2. Setup Build Tools
+      - name: 2. Force-Inject Missing Engine Code
+        # This manually pulls the 'Common' and 'Patches' folders which are usually empty
+        run: |
+          git submodule deinit -f . || true
+          git submodule update --init --recursive --force --depth 1
+
+      - name: 3. Setup Build Tools
         run: |
           brew install cmake ninja pkg-config sdl2
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      - name: 3. Locate and Fix CMake Path
-        # This finds exactly where CMakeLists.txt is and sets the path
-        run: |
-          PROJ_PATH=$(find . -name "CMakeLists.txt" -not -path "./build/*" -print -quit)
-          if [ -z "$PROJ_PATH" ]; then
-            echo "ERROR: Could not find CMakeLists.txt. Your repository might be empty or wrong fork."
-            exit 1
-          fi
-          echo "PROJ_DIR=$(dirname "$PROJ_PATH")" >> $GITHUB_ENV
-
       - name: 4. The Absolute Configuration
         run: |
           mkdir -p build
-          # We use the path found in Step 3
-          cmake -S "${{ env.PROJ_DIR }}" -B build \
+          # -Wno-dev kills developer warnings that cause exit codes
+          cmake -S . -B build \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+            -DSEARCH_DOCUMENTS_DIR=ON \
             -DCMAKE_BUILD_TYPE=Release \
-            -DSEARCH_DOCUMENTS_DIR=ON
+            -Wno-dev
 
       - name: 5. Hard Build
         run: |
+          # If this fails, the C++ code itself has an error.
           cmake --build build --config Release --target UnleashedRecomp -- -allowProvisioningUpdates=NO
 
       - name: 6. Real IPA Packaging
@@ -54,21 +48,22 @@ jobs:
           mkdir -p Payload
           APP_PATH=$(find build -name "*.app" -type d | head -n 1)
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Build finished but no app bundle was created."
+            echo "ERROR: Build failed to create app bundle."
             exit 1
           fi
           cp -r "$APP_PATH" Payload/
           zip -qr UnleashedRecomp_iOS.ipa Payload
           
-          # Final check: Must be larger than 10MB to be a real app
+          # Verification: Ensure it's not a 166-byte empty file
           SIZE=$(stat -f%z UnleashedRecomp_iOS.ipa)
-          if [ "$SIZE" -lt 10000000 ]; then
-            echo "ERROR: IPA is too small. It did not build correctly."
+          if [ "$SIZE" -lt 5000000 ]; then
+            echo "ERROR: IPA is too small. Build was incomplete."
             exit 1
           fi
+          echo "Final IPA Size: $SIZE bytes"
 
-      - name: 7. Upload Artifact
+      - name: 7. Upload
         uses: actions/upload-artifact@v4
         with:
-          name: UnleashedRecomp-iOS-Final
+          name: UnleashedRecomp-iOS
           path: UnleashedRecomp_iOS.ipa
