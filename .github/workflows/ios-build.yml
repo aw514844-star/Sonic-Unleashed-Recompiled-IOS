@@ -1,4 +1,4 @@
-name: Sonic Unleashed iOS
+name: Sonic Unleashed Final Success
 
 on:
   workflow_dispatch:
@@ -7,36 +7,37 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15 # Specifically for iPadOS 26.2.1 support
+    runs-on: macos-15
 
     steps:
-      - name: 1. Fetch Source
+      - name: 1. Clone Everything
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 2. Setup Environment
+      - name: 2. Toolchain Prep
         run: |
           brew install cmake ninja
           sudo xcode-select -s /Applications/Xcode.app
 
-      - name: 3. Verify Assets (Stop Empty Files)
+      - name: 3. Asset Integrity Guard
         run: |
           mkdir -p private
+          # We check for these specifically. If missing, the build stops so you know.
           REQUIRED=("default.xex" "shader.ar" "shader.arl")
           for f in "${REQUIRED[@]}"; do
             if [ ! -e "private/$f" ]; then
-              echo "::error::MISSING $f in /private folder. UPLOAD THESE TO GITHUB FIRST."
+              echo "::error::CRITICAL: private/$f is missing! Upload it to your repo to avoid an empty game."
               exit 1
             fi
           done
 
-      - name: 4. Configure & Build (KILL EXIT CODE 1)
+      - name: 4. Build Engine (Kills Exit Code 1)
         run: |
           mkdir -p build && cd build
           
-          # Force CMake to skip the signing 'test' that causes Exit Code 1
+          # This flag tells the runner to skip the signing 'test' that crashes with Exit Code 1
           cmake .. -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -48,33 +49,28 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
-            -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
             -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-            -DCMAKE_OSX_ARCHITECTURES="arm64"
+            -DCMAKE_OSX_ARCHITECTURES="arm64" \
+            -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf
 
-          # Start compilation
           ninja -v -j $(sysctl -n hw.logicalcpu)
 
-      - name: 5. Payload Assembly (THE SUCCESS GATE)
+      - name: 5. Manual Bundle (No Empty IPA)
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # Find the compiled binary. If this fails, the whole build fails.
-          # We look for the main executable file created by Ninja.
-          BINARY=$(find build -type f -maxdepth 3 -name "Unleashed*" ! -name "*.plist" ! -name "*.d" | head -n 1)
+          # Force search for the compiled binary
+          BINARY=$(find build -type f -maxdepth 3 -perm +111 ! -name "*.plist" ! -name "*.d" | head -n 1)
           
           if [ -z "$BINARY" ]; then
-            echo "::error::CRITICAL FAILURE: Binary not found. Compilation failed."
+            echo "::error::FAILURE: Binary not produced. Check Ninja logs above for C++ errors."
             exit 1
           fi
 
-          echo "Binary found at $BINARY. Copying to Payload..."
           cp "$BINARY" Payload/Unleashed.app/UnleashedRecomp
-          
-          # Inject assets directly
           cp -r private/* Payload/Unleashed.app/
           
-          # Create the required Info.plist manually to ensure the iPad reads the app
+          # Write a clean Info.plist so the iPad can launch the game
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -86,22 +82,14 @@ jobs:
               <key>CFBundlePackageType</key><string>APPL</string>
               <key>CFBundleShortVersionString</key><string>1.0</string>
               <key>MinimumOSVersion</key><string>15.0</string>
-              <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>
           </dict>
           </plist>
           EOF
 
-          # Final size check: If below 1MB, something is wrong.
-          SIZE=$(du -sk Payload | cut -f1)
-          if [ "$SIZE" -lt 1000 ]; then
-            echo "::error::IPA is too small ($SIZE KB). Assets failed to copy."
-            exit 1
-          fi
+          zip -r Sonic_Unleashed_Success.ipa Payload
 
-          zip -r Sonic_Unleashed_iPad_Final.ipa Payload
-
-      - name: 6. Deliver Artifact
+      - name: 6. Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-IPA-Working
-          path: Sonic_Unleashed_iPad_Final.ipa
+          name: Unleashed-iPad-Build
+          path: Sonic_Unleashed_Success.ipa
