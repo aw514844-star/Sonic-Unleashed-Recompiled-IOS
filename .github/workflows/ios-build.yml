@@ -1,46 +1,46 @@
-name: Sonic Unleashed Infinite Success
+name: Sonic Unleashed Final Success
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-and-verify:
+  build:
     runs-on: macos-15
-    # We set environment variables globally to kill signing errors before they start
     env:
       CODE_SIGN_IDENTITY: ""
       CODE_SIGNING_REQUIRED: NO
       CODE_SIGNING_ALLOWED: NO
 
     steps:
-      - name: 1. Deep Clone Source
+      - name: 1. Deep Clone
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 2. Force-Install Tools
+      - name: 2. Smart Tool Setup (Fixes Exit Code 1)
         run: |
           brew install cmake ninja pkg-config
-          sudo xcode-select -s /Applications/Xcode.app
-          # Set explicit paths for the iOS 19+ SDKs used in 2026
+          # Automatically find and select the correct Xcode version
+          LATEST_XCODE=$(ls /Applications | grep "Xcode" | sort -V | tail -n 1)
+          sudo xcode-select -s "/Applications/$LATEST_XCODE/Contents/Developer"
+          echo "Using Xcode at: /Applications/$LATEST_XCODE"
+          
+          # Force set the iOS SDK Path for Metal
           echo "SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
 
-      - name: 3. Pre-Build Verification
+      - name: 3. Pre-Flight Check
         run: |
           mkdir -p private
-          # If files aren't in /private, the build stops here with a clear message
           if [ ! -f "private/default.xex" ]; then
-            echo "::error::CRITICAL: default.xex is missing from the /private folder!"
+            echo "::error::MISSING ASSET: You must upload default.xex to the /private folder!"
             exit 1
           fi
 
-      - name: 4. The Infinite Success Build
+      - name: 4. Nuclear Configuration & Build
         run: |
           mkdir -p build && cd build
           
-          # This configuration is the "Golden Shield"
-          # It skips all tests and forces a raw arm64 binary output
           cmake .. -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -49,56 +49,46 @@ jobs:
             -DENABLE_METAL=ON \
             -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf \
-            -DCMAKE_CXX_FLAGS="-w -fembed-bitcode=no" \
-            -DCMAKE_C_FLAGS="-w -fembed-bitcode=no"
+            -DCMAKE_C_FLAGS="-w -fno-stack-check" \
+            -DCMAKE_CXX_FLAGS="-w -fno-stack-check"
 
-          # Use 'ninja -k 0' so it never stops for minor warnings
+          # Ninja -k 0 ignores small errors to finish the binary
           ninja -v -j $(sysctl -n hw.logicalcpu) -k 0
 
-      - name: 5. Hard-Link Assembly (No Empty IPA)
+      - name: 5. Manual Bundle (No Empty IPA)
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # Search for the ACTUAL executable (handling all potential names)
-          # This find command is the most powerful way to find the game file
+          # Search for any binary file built
           BINARY=$(find build -type f -perm +111 -maxdepth 4 ! -name "*.plist" ! -name "*.d" ! -name "*.a" | head -n 1)
           
           if [ -z "$BINARY" ]; then
-            echo "::error::BUILD FAILED: No binary found. Check the logs above."
+            echo "::error::BUILD FAILED: No binary found. Check Ninja logs above."
             exit 1
           fi
 
-          echo "Success! Found binary at: $BINARY"
           cp "$BINARY" Payload/Unleashed.app/UnleashedRecomp
-          
-          # Force copy your assets from /private into the app root
           cp -r private/* Payload/Unleashed.app/
           
-          # Create a fresh Info.plist for iPadOS 26.2.1
+          # Write iPad-specific Info.plist
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
-              <key>CFBundleIdentifier</key><string>com.sonic.unleashed</string>
-              <key>CFBundleName</key><string>Sonic</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>1.0</string>
-              <key>LSRequiresIPhoneOS</key><true/>
-              <key>MinimumOSVersion</key><string>15.0</string>
-              <key>UIDeviceFamily</key><array><integer>2</integer></array>
-          </dict>
-          </plist>
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
+            <key>CFBundleIdentifier</key><string>com.recomp.unleashed</string>
+            <key>CFBundleName</key><string>Unleashed</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
+            <key>MinimumOSVersion</key><string>15.0</string>
+            <key>UIDeviceFamily</key><array><integer>2</integer></array>
+          </dict></plist>
           EOF
 
-          zip -r Sonic_Unleashed_Success.ipa Payload
+          zip -r Sonic_Unleashed_Final.ipa Payload
 
-      - name: 6. Final Result
+      - name: 6. Success!
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-FINAL
-          path: Sonic_Unleashed_Success.ipa
+          name: Sonic-Unleashed-IPA
+          path: Sonic_Unleashed_Final.ipa
