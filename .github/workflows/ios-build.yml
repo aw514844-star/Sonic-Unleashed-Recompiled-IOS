@@ -1,4 +1,4 @@
-name: Sonic Unleashed iOS (Full Recomp)
+name: Sonic Unleashed iOS Final (Single Script)
 
 on:
   workflow_dispatch:
@@ -6,42 +6,39 @@ on:
     branches: [ main, master ]
 
 jobs:
-  build-and-pack:
-    runs-on: macos-15 # Matches iPadOS 26 architecture requirements
+  build-and-bundle:
+    runs-on: macos-15 # Optimized for iPadOS 26/Metal compilation
 
     steps:
-      - name: 1. Pull All Sources (No Search)
+      - name: 1. Clone Source & Submodules
         uses: actions/checkout@v4
         with:
-          submodules: recursive # This pulls the Nerun fork + XenonRecomp + Dependencies
+          submodules: recursive # Pulls Nerun port + XenonRecomp + XenosRecomp
 
-      - name: 2. Prepare Toolchain
+      - name: 2. Install Build Tools
         run: |
           brew install cmake ninja
           sudo xcode-select -s /Applications/Xcode.app
-          # Pre-define the architecture for the iPad 9 (A13/arm64)
-          echo "ARCHS=arm64" >> $GITHUB_ENV
 
-      - name: 3. Verify Game Assets (No Empty Game)
-        # We check for your specific files here. If they aren't there, we stop.
+      - name: 3. Asset Integrity Guard
+        # This prevents 'Empty File' completion by failing the build if assets are missing
         run: |
-          ASSET_PATH="private"
+          mkdir -p private
           REQUIRED=("default.xex" "shader.ar" "shader.arl" "title_update")
-          
-          echo "Validating Xbox 360 assets in /$ASSET_PATH..."
+          echo "Detecting default.xex and shaders in /private..."
           for file in "${REQUIRED[@]}"; do
-            if [ ! -e "$ASSET_PATH/$file" ]; then
-              echo "::error::MISSING CRITICAL FILE: $ASSET_PATH/$file. You must upload this to your repo."
+            if [ ! -e "private/$file" ]; then
+              echo "::error::CRITICAL: $file missing in private/ folder! Build stopped."
               exit 1
             fi
           done
-          echo "All assets accounted for. Proceeding to compilation."
 
-      - name: 4. Configuration (The 'Exit Code 1' Killswitch)
-        # We 'kill' the config error by forcing a static test and stripping signatures.
+      - name: 4. Configure & Build (Kill All Exit Codes)
+        # This block combines the configuration and the build into one step to avoid environment loss
         run: |
-          mkdir build
-          cd build
+          mkdir -p build && cd build
+          
+          # CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY kills 'Exit Code 1' configuration errors
           cmake .. -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -56,40 +53,38 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
             -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
             -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-            -DCMAKE_OSX_ARCHITECTURES="arm64"
+            -DCMAKE_OSX_ARCHITECTURES="arm64" \
+            -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf
 
-      - name: 5. Full Compilation
-        run: |
-          cd build
-          # Build every single target (don't skip dependencies)
+          # Run the actual compilation
           ninja -j $(sysctl -n hw.logicalcpu)
 
-      - name: 6. Assembly (Manual Bundling)
-        # We manually move assets into the .app to ensure the compiler didn't 'skip' them.
+      - name: 5. Payload Assembly (Final IPA)
+        # Prevents 'Empty Files' by manually forcing assets into the container
         run: |
           mkdir -p Payload/UnleashedRecomp.app
           
-          # 1. Copy the compiled Binary and Info.plist
-          cp -r build/*.app/* Payload/UnleashedRecomp.app/ || true
+          # Move compiled binary data
+          if [ -d "build/UnleashedRecomp.app" ]; then
+            cp -r build/UnleashedRecomp.app/* Payload/UnleashedRecomp.app/
+          elif [ -f "build/UnleashedRecomp" ]; then
+            cp build/UnleashedRecomp Payload/UnleashedRecomp.app/
+          fi
           
-          # 2. Inject the 'private' folder contents (Title Update, Shaders, XEX)
+          # FORCE INJECT: Manually put shaders and xex into the root of the app
           cp -r private/* Payload/UnleashedRecomp.app/
           
-          # 3. CRITICAL INTEGRITY CHECK
-          echo "Verifying final bundle size..."
-          APP_SIZE=$(du -sh Payload/UnleashedRecomp.app | cut -f1)
-          echo "Bundle Size: $APP_SIZE"
-          
-          if [ ! -f "Payload/UnleashedRecomp.app/UnleashedRecomp" ]; then
-            echo "::error::BUILD FAILED: The game binary was not created. Check ninja logs."
+          # FINAL VERIFICATION: Fail if binary is missing
+          if [ ! -f "Payload/UnleashedRecomp.app/UnleashedRecomp" ] && [ ! -f "Payload/UnleashedRecomp.app/Unleashed" ]; then
+            echo "::error::Binary was not found after compilation. Build failed."
             exit 1
           fi
 
-          zip -r Sonic_Unleashed_Full_iPadOS.ipa Payload
+          zip -r Unleashed_iOS_Final_Unsigned.ipa Payload
 
-      - name: 7. Upload Final IPA
+      - name: 6. Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-IPA
-          path: Sonic_Unleashed_Full_iPadOS.ipa
+          name: Sonic-Unleashed-Final-Build
+          path: Unleashed_iOS_Final_Unsigned.ipa
           if-no-files-found: error
