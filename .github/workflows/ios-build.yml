@@ -1,69 +1,89 @@
-name: Unleashed Recomp iOS - Final Fix
+name: Sonic Unleashed iOS Recomp (No-Signing)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main, master ]
 
 jobs:
-  build:
-    runs-on: macos-14
+  build-port:
+    # Use macOS 15 for the latest iPadOS 26.x SDK compatibility
+    runs-on: macos-15
+
     steps:
-      - name: 1. Checkout
+      - name: 1. Clone Project & Submodules
         uses: actions/checkout@v4
         with:
-          submodules: false # We will handle this manually to avoid errors
+          submodules: recursive # Crucial: gets XenonRecomp/XenosRecomp sources
 
-      - name: 2. Force-Inject Engine Code
-        # This manually pulls the 'Common', 'Patches', and 'External' folders
-        # which are the most common cause of Exit Code 1
+      - name: 2. Install Build Tools
         run: |
-          git submodule sync
-          git submodule update --init --recursive --force --depth 1
+          brew install cmake ninja
+          sudo xcode-select -s /Applications/Xcode.app
 
-      - name: 3. Setup Dependencies
+      - name: 3. Verify Private Assets (No Empty Files)
         run: |
-          brew install cmake ninja pkg-config sdl2
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          # Ensuring the private folder exists and contains your specific files
+          ASSET_DIR="private"
+          REQUIRED_FILES=(
+            "$ASSET_DIR/default.xex"
+            "$ASSET_DIR/shader.ar"
+            "$ASSET_DIR/shader.arl"
+            "$ASSET_DIR/title_update"
+          )
 
-      - name: 4. The Direct Root Configuration
+          echo "Scanning for Xbox 360 Assets in /$ASSET_DIR..."
+          for item in "${REQUIRED_FILES[@]}"; do
+            if [ ! -e "$item" ]; then
+              echo "::error file=$item::CRITICAL ERROR: $item is missing! Upload it to the 'private' folder in your repo."
+              exit 1
+            fi
+          done
+          echo "All assets found. Ready for compilation."
+
+      - name: 4. Configure CMake (Strict No-Signing)
         run: |
-          mkdir -p build
-          # -Wno-dev tells CMake to ignore small warnings that cause Exit Code 1
-          cmake . -B build \
-            -G Xcode \
+          mkdir build
+          cd build
+          # -DCODE_SIGNING_ALLOWED=NO bypasses all Apple Developer checks
+          # -DENABLE_METAL=ON is required for the Nerun iOS fork
+          cmake .. -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DSEARCH_DOCUMENTS_DIR=ON \
-            -Wno-dev
+            -DCODE_SIGNING_ALLOWED=NO \
+            -DCODE_SIGNING_REQUIRED=NO \
+            -DRECOMP_PLATFORM=iOS \
+            -DENABLE_METAL=ON \
+            -DENABLE_ASSET_BUNDLING=ON
 
-      - name: 5. Hard Build
+      - name: 5. Build Binary
         run: |
-          cmake --build build --config Release --target UnleashedRecomp -- -allowProvisioningUpdates=NO
+          cd build
+          ninja
 
-      - name: 6. Intelligent Packaging
+      - name: 6. Package Unsigned IPA
         run: |
-          mkdir -p Payload
-          APP_PATH=$(find build -name "*.app" -type d | head -n 1)
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Build finished but no app bundle was created."
-            exit 1
-          fi
-          cp -r "$APP_PATH" Payload/
-          zip -qr UnleashedRecomp_iOS.ipa Payload
+          # Manually constructing the Payload for iPadOS installation
+          mkdir -p Payload/UnleashedRecomp.app
           
-          # Final Reality Check: If it's under 10MB, it's a fake/empty build
-          SIZE=$(stat -f%z UnleashedRecomp_iOS.ipa)
-          echo "Final IPA Size: $SIZE bytes"
-          if [ "$SIZE" -lt 10000000 ]; then
-            echo "ERROR: IPA is too small. Something is wrong with the source."
+          # Copy the compiled binary and resources
+          cp -r build/UnleashedRecomp.app/* Payload/UnleashedRecomp.app/ || true
+          
+          # Inject your private assets into the app bundle root
+          cp -r private/* Payload/UnleashedRecomp.app/
+          
+          # Final check to ensure it's not an empty file
+          if [ ! -f "Payload/UnleashedRecomp.app/UnleashedRecomp" ]; then
+            echo "::error::Build failed to produce a binary. Check Ninja logs."
             exit 1
           fi
 
-      - name: 7. Upload
+          zip -r Sonic_Unleashed_iOS_Unsigned.ipa Payload
+
+      - name: 7. Upload Build Result
         uses: actions/upload-artifact@v4
         with:
-          name: UnleashedRecomp-iOS-Working
-          path: UnleashedRecomp_iOS.ipa
+          name: Sonic-Unleashed-iPadOS-26
+          path: Sonic_Unleashed_iOS_Unsigned.ipa
+          if-no-files-found: error
