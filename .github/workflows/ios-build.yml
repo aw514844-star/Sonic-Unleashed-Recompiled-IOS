@@ -1,4 +1,4 @@
-name: Unleashed Recomp iOS - Final Fix
+name: Unleashed Recomp iOS - Final Error Killer
 
 on:
   workflow_dispatch:
@@ -7,60 +7,60 @@ jobs:
   build:
     runs-on: macos-14
     steps:
-      - name: 1. Checkout Main Fork
+      - name: 1. Deep Checkout
         uses: actions/checkout@v4
         with:
-          submodules: false # We will handle submodules manually to prevent Exit Code 1
+          submodules: 'recursive'
+          fetch-depth: 0
 
-      - name: 2. Force-Inject Missing Engine Code
-        # This manually pulls the 'Common' and 'Patches' folders which are usually empty
+      - name: 2. Force Submodule Fix
+        # This ensures the folders aren't empty, which is the #1 cause of Exit Code 1
         run: |
-          git submodule deinit -f . || true
-          git submodule update --init --recursive --force --depth 1
+          git submodule sync --recursive
+          git submodule update --init --recursive --force
 
-      - name: 3. Setup Build Tools
+      - name: 3. Setup Tools
         run: |
           brew install cmake ninja pkg-config sdl2
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      - name: 4. The Absolute Configuration
+      - name: 4. The Direct Configuration
+        # We remove all "smart" logic and force the path to the current directory (.)
         run: |
           mkdir -p build
-          # -Wno-dev kills developer warnings that cause exit codes
-          cmake -S . -B build \
+          cmake . -B build \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
-            -DSEARCH_DOCUMENTS_DIR=ON \
             -DCMAKE_BUILD_TYPE=Release \
+            -DSEARCH_DOCUMENTS_DIR=ON \
             -Wno-dev
 
       - name: 5. Hard Build
         run: |
-          # If this fails, the C++ code itself has an error.
           cmake --build build --config Release --target UnleashedRecomp -- -allowProvisioningUpdates=NO
 
-      - name: 6. Real IPA Packaging
+      - name: 6. Non-Empty Package Check
         run: |
           mkdir -p Payload
           APP_PATH=$(find build -name "*.app" -type d | head -n 1)
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Build failed to create app bundle."
+            echo "FAILED: No app bundle found."
             exit 1
           fi
           cp -r "$APP_PATH" Payload/
           zip -qr UnleashedRecomp_iOS.ipa Payload
           
-          # Verification: Ensure it's not a 166-byte empty file
+          # This ensures the IPA is a real size (not 166 bytes)
           SIZE=$(stat -f%z UnleashedRecomp_iOS.ipa)
-          if [ "$SIZE" -lt 5000000 ]; then
+          echo "IPA Size: $SIZE bytes"
+          if [ "$SIZE" -lt 10000000 ]; then
             echo "ERROR: IPA is too small. Build was incomplete."
             exit 1
           fi
-          echo "Final IPA Size: $SIZE bytes"
 
       - name: 7. Upload
         uses: actions/upload-artifact@v4
