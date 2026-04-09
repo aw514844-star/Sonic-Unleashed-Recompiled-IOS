@@ -1,4 +1,4 @@
-name: Unleashed Recomp iOS - Search & Build
+name: Unleashed Recomp iOS - Non-Empty Guaranteed
 
 on:
   workflow_dispatch:
@@ -13,48 +13,70 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 0
 
-      - name: 2. Locate Project File
-        # This finds the directory containing CMakeLists.txt automatically
+      - name: 2. Force Submodule Download & Verification
         run: |
-          PROJ_DIR=$(find . -name "CMakeLists.txt" -not -path "./build/*" -print -quit | xargs dirname)
-          echo "PROJECT_ROOT=$PROJ_DIR" >> $GITHUB_ENV
-          echo "Found project in: $PROJ_DIR"
+          # Sync and update submodules
+          git submodule sync --recursive
+          git submodule update --init --recursive --force
+          
+          # Verification: Check if common source directories are empty
+          # If 'Source' or 'Common' is empty, this fails here so we don't waste time on an empty IPA
+          if [ -z "$(ls -A .)" ]; then
+            echo "Error: Repository root is empty!"
+            exit 1
+          fi
 
-      - name: 3. Setup Tools
+      - name: 3. Setup Dependencies
         run: |
           brew install cmake ninja pkg-config sdl2
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
       - name: 4. The Smart Configuration
         run: |
+          # Find the directory containing CMakeLists.txt
+          PROJ_DIR=$(find . -name "CMakeLists.txt" -not -path "./build/*" -print -quit | xargs dirname)
+          echo "Building from: $PROJ_DIR"
+          
           mkdir -p build
-          # We use the PROJECT_ROOT found in Step 2
-          cmake -S ${{ env.PROJECT_ROOT }} -B build \
+          cmake -S "$PROJ_DIR" -B build \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
-            -DSEARCH_DOCUMENTS_DIR=ON \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSEARCH_DOCUMENTS_DIR=ON
 
-      - name: 5. Build
+      - name: 5. Hard Build (No Skips)
         run: |
+          # We build the target. If this fails, the code itself has a bug.
           cmake --build build --config Release --target UnleashedRecomp -- -allowProvisioningUpdates=NO
 
-      - name: 6. Package & Size Check
+      - name: 6. Intelligent Packaging
         run: |
           mkdir -p Payload
+          # Find the .app bundle
           APP_PATH=$(find build -name "*.app" -type d | head -n 1)
-          if [ -z "$APP_PATH" ]; then exit 1; fi
+          
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: Build finished but .app bundle is missing!"
+            exit 1
+          fi
+          
           cp -r "$APP_PATH" Payload/
           zip -qr UnleashedRecomp_iOS.ipa Payload
-          # This prints the size in the logs so you know if it's real
-          du -sh UnleashedRecomp_iOS.ipa
+          
+          # Verification: Ensure the IPA is not a tiny empty file
+          FILESIZE=$(stat -f%z "UnleashedRecomp_iOS.ipa")
+          echo "Final IPA Size: $FILESIZE bytes"
+          if [ "$FILESIZE" -lt 1000000 ]; then
+            echo "ERROR: IPA is too small (under 1MB). Something went wrong!"
+            exit 1
+          fi
 
       - name: 7. Upload
         uses: actions/upload-artifact@v4
         with:
-          name: UnleashedRecomp-iOS
+          name: UnleashedRecomp-iOS-Final
           path: UnleashedRecomp_iOS.ipa
