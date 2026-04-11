@@ -1,56 +1,62 @@
-name: Fixed Sonic Build
+name: God-Mode Sonic Build
 on: [workflow_dispatch]
 
-permissions:
-  contents: write
-
 jobs:
-  build_ios:
-    runs-on: macos-latest
+  build:
+    runs-on: macos-14 # Uses latest ARM-based Mac runners
     steps:
-      - name: 1. Pull Code
+      - name: 1. Deep Clone Repo
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
+          fetch-depth: 0
 
-      - name: 2. Force Assets to Private Folder
+      - name: 2. Install Missing dependencies
         run: |
-          mkdir -p ./UnleashedRecompLib/private/
-          # Copy your files from ANY folder they might be in
-          cp -v default.xex ./UnleashedRecompLib/private/ || cp -v game_files/default.xex ./UnleashedRecompLib/private/ || true
-          cp -v default.xexp ./UnleashedRecompLib/private/ || cp -v game_files/default.xexp ./UnleashedRecompLib/private/ || true
-          cp -v shader.ar ./UnleashedRecompLib/private/ || cp -v game_files/shader.ar ./UnleashedRecompLib/private/ || true
-          cp -v shader.arl ./UnleashedRecompLib/private/ || cp -v game_files/shader.arl ./UnleashedRecompLib/private/ || true
+          brew install vulkan-headers molten-vk glslang || true
+          sudo xcode-select -s /Applications/Xcode_16.app
 
-      - name: 3. Set Xcode 16
-        run: sudo xcode-select -s /Applications/Xcode_16.app || true
-
-      - name: 4. Master Build
+      - name: 3. Force Asset Check
         run: |
+          # Ensuring the private folder exists and has your files
+          mkdir -p UnleashedRecompLib/private/
+          cp -v default.xex UnleashedRecompLib/private/ || true
+          cp -v default.xexp UnleashedRecompLib/private/ || true
+          cp -v shader.ar UnleashedRecompLib/private/ || true
+          cp -v shader.arl UnleashedRecompLib/private/ || true
+
+      - name: 4. The Nuclear Build
+        run: |
+          # This command builds the project while ignoring signing and bitcode errors
           xcodebuild archive \
+          -project "UnleashedRecomp.xcodeproj" \
           -scheme "UnleashedRecomp" \
           -sdk iphoneos \
           -configuration Release \
+          -destination 'generic/platform=iOS' \
           CODE_SIGNING_ALLOWED=NO \
           CODE_SIGNING_REQUIRED=NO \
-          -archivePath build/Unleashed.xcarchive || true
+          CODE_SIGN_IDENTITY="" \
+          AD_HOC_CODE_SIGNING_ALLOWED=YES \
+          ENABLE_BITCODE=NO \
+          -archivePath build/Unleashed.xcarchive || echo "Build failed but continuing to hunt..."
 
-      - name: 5. Hunt and Package IPA
+      - name: 5. The Nuclear Hunt (Fixes 1KB IPA)
         run: |
           mkdir -p Payload
-          # Search everywhere for the .app folder so we don't get a 1KB file
+          # This finds the .app even if it's buried in a weird folder
           find build/Unleashed.xcarchive -name "*.app" -type d -exec cp -r {} Payload/ \;
           
-          # Check if Payload is empty and show error if so
-          if [ -z "$(ls -A Payload)" ]; then
-            echo "BUILD FAILED: No app found. IPA will be empty!"
+          # Check if we actually found something
+          if [ -d "Payload/UnleashedRecomp.app" ] || [ "$(ls -A Payload)" ]; then
+            zip -r9 Unleashed_HD.ipa Payload
+          else
+            echo "STILL EMPTY: The build failed to create the .app file."
             exit 1
           fi
-          
-          zip -r Unleashed_HD.ipa Payload
 
       - name: 6. Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-HD-iPad
+          name: Sonic-Unleashed-FINAL
           path: Unleashed_HD.ipa
