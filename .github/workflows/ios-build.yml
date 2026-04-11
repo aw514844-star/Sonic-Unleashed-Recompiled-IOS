@@ -1,4 +1,4 @@
-name: SELF_HEALING_TRY_62
+name: ABSOLUTE_FINAL_FIX
 on: [workflow_dispatch]
 
 jobs:
@@ -10,86 +10,58 @@ jobs:
       - name: 1. Deep Clone & Reset
         uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: 'recursive' # Crucial for engine guts
           fetch-depth: 0
 
-      - name: 2. SURGICAL SIGNING STRIP
-        # This deletes the requirement for a Mac/Paid account from the code itself
+      - name: 2. FORCE SUBMODULE DOWNLOAD (Fixes Exit Code 1)
         run: |
-          find . -name "*.pbxproj" -exec sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' {} + || true
-          find . -name "*.pbxproj" -exec sed -i '' 's/CODE_SIGN_IDENTITY = "iPhone Developer"/CODE_SIGN_IDENTITY = ""/g' {} + || true
-          find . -name "*.pbxproj" -exec sed -i '' 's/PROVISIONING_PROFILE_SPECIFIER = "[^"]*"/PROVISIONING_PROFILE_SPECIFIER = ""/g' {} + || true
-          find . -name "*.pbxproj" -exec sed -i '' 's/DEVELOPMENT_TEAM = [A-Z0-9]*/DEVELOPMENT_TEAM = ""/g' {} + || true
-
-      - name: 3. Asset Injection & 720p Force
-        run: |
+          # This command forces the download of the missing engine files
           git submodule update --init --recursive --force || true
+          
+          # DIAGNOSTIC: Check if the engine is actually there
+          if [ ! -f "UnleashedRecompLib/CMakeLists.txt" ] && [ ! -d "UnleashedRecompLib/src" ]; then
+            echo "ERROR: Engine code is still missing! You must re-fork the original repo."
+            exit 1
+          fi
+
+      - name: 3. Asset & Performance Tweaks
+        run: |
           mkdir -p UnleashedRecompLib/private/
           find . -name "default.xex" -exec cp -v {} UnleashedRecompLib/private/ \; || true
           find . -name "shader.ar*" -exec cp -v {} UnleashedRecompLib/private/ \; || true
-          # Performance tweaks for iPad 9 A13 Chip (720p + 0.5 Scale)
+          # iPad 9 Performance (720p Force)
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1920/1280/g' {} + || true
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1080/720/g' {} + || true
-          find . -type f -name "*.toml" -exec sed -i '' 's/ResolutionScale = 1.0/ResolutionScale = 0.5/g' {} + || true
 
       - name: 4. The Master Build
         run: |
           brew install glslang molten-vk vulkan-headers || true
           PROJ_FILE=$(find . -name "*.xcodeproj" | head -n 1)
           SCHEME_NAME=$(xcodebuild -list -project "$PROJ_FILE" | grep -A 5 "Schemes:" | tail -n 1 | xargs)
-          # ARCHIVE is much more stable than BUILD for bypass
-          xcodebuild archive \
+          xcodebuild clean build \
           -project "$PROJ_FILE" \
           -scheme "$SCHEME_NAME" \
           -sdk iphoneos \
           -configuration Release \
-          -archivePath $PWD/build/Unleashed.xcarchive \
-          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGN_IDENTITY="-" \
+          CODE_SIGNING_ALLOWED=YES \
           CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGN_IDENTITY="" \
           AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      - name: 5. Hunt and Payload Creation
+      - name: 5. Nuclear Hunt & IPA Package
         run: |
           mkdir -p Payload
-          cp -rv build/Unleashed.xcarchive/Products/Applications/*.app Payload/ || true
-          if [ -z "$(ls -A Payload 2>/dev/null)" ]; then
-            find . -name "*.app" -type d -not -path "./Payload/*" -exec cp -rv {} Payload/ \; || true
-          fi
-
-      - name: 6. SELF-HEALING DIAGNOSTIC (The Final Check)
-        # This step checks for the common "Exit 65" ghost errors and missing shaders
-        run: |
-          echo "Starting internal integrity scan..."
-          APP_PATH=$(find Payload -name "*.app" -type d | head -n 1)
-          
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No App folder found! Build failed at the source."
+          find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d -exec cp -rv {} Payload/ \; || true
+          find . -name "*.app" -type d -not -path "./Payload/*" -exec cp -rv {} Payload/ \; || true
+          if [ -n "$(ls -A Payload 2>/dev/null)" ]; then
+            zip -r9 Sonic_Unleashed_Final.ipa Payload
+          else
+            echo "CRITICAL: No app was built. Check Step 4 logs."
             exit 1
           fi
 
-          # Fix 1: Ensure private assets are actually INSIDE the app
-          if [ ! -d "$APP_PATH/private" ]; then
-            echo "FIXING: Assets folder missing from bundle. Injecting now..."
-            cp -rv UnleashedRecompLib/private "$APP_PATH/" || true
-          fi
-
-          # Fix 2: Check for Info.plist corruption (Common install failure)
-          if [ ! -f "$APP_PATH/Info.plist" ]; then
-            echo "FIXING: Info.plist not found. Copying template..."
-            find . -name "Info.plist" -not -path "./Payload/*" -exec cp -v {} "$APP_PATH/" \; || true
-          fi
-
-          # Fix 3: Size Verification
-          SIZE=$(du -sh Payload | cut -f1)
-          echo "Final Payload Size: $SIZE"
-          if [[ "$SIZE" == "0B" ]]; then exit 1; fi
-
-      - name: 7. Result Packaging
-        run: zip -r9 Sonic_Unleashed_Indestructible.ipa Payload
-
-      - name: 8. Upload Artifact
+      - name: 6. Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-TRY-62-SUCCESS
-          path: Sonic_Unleashed_Indestructible.ipa
+          name: Sonic-Unleashed-FINAL
+          path: Sonic_Unleashed_Final.ipa
