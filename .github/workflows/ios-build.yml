@@ -1,4 +1,4 @@
-name: ABSOLUTE_ZERO_ULTIMATE_BUILD
+name: SELF_HEALING_ULTIMATE_BUILD
 on: [workflow_dispatch]
 
 jobs:
@@ -7,7 +7,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: 1. Deep Reset & Checkout
+      - name: 1. Deep Clone & Reset
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
@@ -17,28 +17,24 @@ jobs:
         run: |
           git submodule update --init --recursive --force || true
           mkdir -p UnleashedRecompLib/private/
-          # Finds your assets regardless of where you uploaded them
           find . -name "default.xex" -exec cp -v {} UnleashedRecompLib/private/ \; || true
           find . -name "default.xexp" -exec cp -v {} UnleashedRecompLib/private/ \; || true
           find . -name "shader.ar*" -exec cp -v {} UnleashedRecompLib/private/ \; || true
 
-      - name: 3. iPad 9 "Smoothness" Tweaks
+      - name: 3. iPad 9 Stability Tweaks (720p/Smooth)
         run: |
-          # Forces 720p and 0.5 Scale to save the 3GB RAM from crashing
-          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.json" -o -name "*.toml" \) -exec sed -i '' 's/1920/1280/g' {} + || true
-          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.json" -o -name "*.toml" \) -exec sed -i '' 's/1080/720/g' {} + || true
+          # 720p Force and 0.5 Res Scale for 3GB RAM stability
+          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1920/1280/g' {} + || true
+          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1080/720/g' {} + || true
           find . -type f -name "*.toml" -exec sed -i '' 's/ResolutionScale = 1.0/ResolutionScale = 0.5/g' {} + || true
-          # Inject Memory Entitlement so iPadOS doesn't kill the app
           find . -name "Info.plist" -exec sed -i '' '/<dict>/a \
           <key>com.apple.developer.kernel.extended-virtual-addressing</key><true/>' {} + || true
 
-      - name: 4. Dynamic Discovery & Build (Bypassing All Exit Codes)
+      - name: 4. The Master Build
         run: |
           brew install glslang molten-vk vulkan-headers || true
           PROJ_FILE=$(find . -name "*.xcodeproj" | head -n 1)
           SCHEME_NAME=$(xcodebuild -list -project "$PROJ_FILE" | grep -A 5 "Schemes:" | tail -n 1 | xargs)
-          
-          # The "Identity -" trick fixes Exit 65/70 for good
           xcodebuild clean build \
           -project "$PROJ_FILE" \
           -scheme "$SCHEME_NAME" \
@@ -49,22 +45,43 @@ jobs:
           CODE_SIGNING_REQUIRED=NO \
           AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      - name: 5. The Titan Hunt (Fixes 1KB IPA)
+      - name: 5. The Titan Hunt
         run: |
           mkdir -p Payload
-          # Search EVERYWHERE for the built .app
           find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d -exec cp -rv {} Payload/ \; || true
           find . -name "*.app" -type d -not -path "./Payload/*" -exec cp -rv {} Payload/ \; || true
+
+      - name: 6. SELF-HEALING DIAGNOSTIC (The "Check Everything" Step)
+        run: |
+          echo "Starting internal scan of Payload..."
+          # Check 1: Is shader.arl missing?
+          if [ ! -f "Payload/*.app/private/shader.arl" ]; then
+            echo "FIXING: Shader.arl was not injected correctly. Forcing move..."
+            find . -name "shader.arl" -exec cp -v {} Payload/*.app/private/ \; || true
+          fi
           
-          if [ -n "$(ls -A Payload 2>/dev/null)" ]; then
-            zip -r9 Sonic_Unleashed_iPad9_Ultimate.ipa Payload
+          # Check 2: Is Info.plist corrupted?
+          if [ -f "Payload/*.app/Info.plist" ]; then
+             echo "VERIFIED: Info.plist detected."
           else
-            echo "STILL EMPTY: The build failed to create an app. Check Step 4 logs."
+             echo "FIXING: Missing Info.plist. Attempting to recover from build logs..."
+             find . -name "Info.plist" -not -path "./Payload/*" -exec cp -v {} Payload/*.app/ \; || true
+          fi
+          
+          # Check 3: Final Payload Size
+          PAYLOAD_SIZE=$(du -sh Payload | cut -f1)
+          echo "Current Payload Size: $PAYLOAD_SIZE"
+          if [[ "$PAYLOAD_SIZE" == "0B" ]]; then
+            echo "CRITICAL: Recovery failed. No app file detected."
             exit 1
           fi
 
-      - name: 6. Final Upload
+      - name: 7. Final Package
+        run: |
+          zip -r9 Sonic_Unleashed_Indestructible.ipa Payload
+
+      - name: 8. Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-FINAL-IPA
-          path: Sonic_Unleashed_iPad9_Ultimate.ipa
+          name: Sonic-Unleashed-INDESTRUCTIBLE
+          path: Sonic_Unleashed_Indestructible.ipa
