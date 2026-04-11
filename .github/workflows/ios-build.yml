@@ -1,72 +1,55 @@
-name: ABSOLUTE_GOD_MODE_BUILD
+name: SURGICAL_STRIKE_BUILD
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: macos-latest
-    permissions:
-      contents: write
     steps:
-      - name: 1. Deep Checkout
+      - name: 1. Checkout & Force Engine Download
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
           fetch-depth: 0
 
-      - name: 2. Setup Environment
+      - name: 2. Fixing Missing Engine Files
+        # This fixes the '5 folders 1 file' issue by pulling the real code
         run: |
-          brew install glslang molten-vk vulkan-headers || true
-          # Force the use of Xcode 16.2+ for maximum iPad 9 compatibility
-          sudo xcode-select -s /Applications/Xcode_16.app || true
+          git submodule update --init --recursive --force || true
+          # Verify if code actually exists now
+          ls -R UnleashedRecompLib | grep "CMakeLists.txt" || echo "ENGINE STILL MISSING"
 
-      - name: 3. Asset & Performance Injection
+      - name: 3. Asset Injection (720p/Smooth Mode)
         run: |
           mkdir -p UnleashedRecompLib/private/
-          # Force-hunt and move assets (including the specific shader.arl)
           find . -name "default.xex" -exec cp -v {} UnleashedRecompLib/private/ \; || true
           find . -name "default.xexp" -exec cp -v {} UnleashedRecompLib/private/ \; || true
           find . -name "shader.ar*" -exec cp -v {} UnleashedRecompLib/private/ \; || true
-          
-          # Force 720p and 0.5 Res Scale for iPad 9's A13/3GB RAM [Search Logic]
-          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.json" -o -name "*.toml" \) -exec sed -i '' 's/1920/1280/g' {} + || true
-          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.json" -o -name "*.toml" \) -exec sed -i '' 's/1080/720/g' {} + || true
-          find . -type f -name "*.toml" -exec sed -i '' 's/ResolutionScale = 1.0/ResolutionScale = 0.5/g' {} + || true
+          # Performance tweaks for iPad 9 (A13/3GB RAM)
+          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1920/1280/g' {} + || true
+          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1080/720/g' {} + || true
 
-      - name: 4. The Indestructible Build
+      - name: 4. The Build
         run: |
-          # Use specific flags to force the build into the products folder
-          xcodebuild archive \
-          -project "UnleashedRecomp.xcodeproj" \
-          -scheme "UnleashedRecomp" \
-          -sdk iphoneos \
-          -configuration Release \
-          -destination 'generic/platform=iOS' \
-          CODE_SIGNING_ALLOWED=NO \
-          CODE_SIGNING_REQUIRED=NO \
-          SKIP_INSTALL=NO \
-          -archivePath $PWD/build/Unleashed.xcarchive || echo "Build errors detected, starting deep hunt..."
+          brew install glslang molten-vk vulkan-headers || true
+          # Simplified build command to prevent path errors
+          xcodebuild build -project "UnleashedRecomp.xcodeproj" -scheme "UnleashedRecomp" -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 
-      - name: 5. The Nuclear Global Hunt (Fixes 1KB/Empty IPA)
+      - name: 5. Final Hunt
         run: |
           mkdir -p Payload
-          # Searches EVERY folder in the entire runner for the .app folder
-          echo "Hunting for .app file globally..."
+          # Hunt for the .app in the DerivedData folder (the hidden build spot)
+          find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d -exec cp -rv {} Payload/ \; || true
           find . -name "*.app" -type d -not -path "./Payload/*" -exec cp -rv {} Payload/ \; || true
           
-          # If Payload is still empty, try searching the standard Xcode products folder
-          if [ -z "$(ls -A Payload 2>/dev/null)" ]; then
-            find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d -exec cp -rv {} Payload/ \; || true
-          fi
-
           if [ -n "$(ls -A Payload 2>/dev/null)" ]; then
-            zip -r9 Sonic_Unleashed_iPad9.ipa Payload
+            zip -r9 Sonic_Unleashed_iPad.ipa Payload
           else
-            echo "STILL EMPTY: Check if submodules are actually present in the repo."
+            echo "STILL EMPTY: The build failed to create the app. Check logs for Step 4."
             exit 1
           fi
 
-      - name: 6. Final Upload
+      - name: 6. Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-FULL-IPA
-          path: Sonic_Unleashed_iPad9.ipa
+          name: Sonic-Unleashed-Final
+          path: Sonic_Unleashed_iPad.ipa
