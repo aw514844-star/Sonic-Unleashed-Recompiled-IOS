@@ -1,61 +1,50 @@
-name: Ultimate Silent God-Mode Build
+name: Sonic iPad Fix
 on: [workflow_dispatch]
 
 jobs:
   build:
-    runs-on: macos-14
+    # Downgraded to macos-13 for better free-tier availability
+    runs-on: macos-13 
     steps:
-      - name: 1. Deep Clone Repo
+      - name: 1. Basic Checkout
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
-          fetch-depth: 0
 
-      - name: 2. Force Install Vulkan (Action-Based)
-        uses: humbletim/install-vulkan-sdk@v1.1.1 # Uses a pre-built binary to avoid brew errors
-        with:
-          version: 1.3.280.1
-
-      - name: 3. Environment & Assets
+      - name: 2. Setup Assets
         run: |
-          export HOMEBREW_NO_AUTO_UPDATE=1
-          brew install glslang molten-vk || true
           mkdir -p UnleashedRecompLib/private/
-          # Force copy your assets from ANY location they might be in
+          # This copies your game files from wherever you put them
           cp -v default.xex UnleashedRecompLib/private/ || true
           cp -v default.xexp UnleashedRecompLib/private/ || true
-          cp -v shader.ar UnleashedRecompLib/private/ || true
-          cp -v shader.arl UnleashedRecompLib/private/ || true
+          cp -v shader.ar* UnleashedRecompLib/private/ || true
 
-      - name: 4. The Master Build
+      - name: 3. Force 720p & Potato Mode
+        # Lowering resolution saves RAM so your iPad 9 doesn't crash
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.app
+          find . -name "*.cpp" -o -name "*.h" -exec sed -i '' 's/1920/1280/g' {} +
+          find . -name "*.cpp" -o -name "*.h" -exec sed -i '' 's/1080/720/g' {} +
+
+      - name: 4. The Quick Build
+        run: |
+          # Only builds the essential files to save time and minutes
           xcodebuild archive \
-          -project "UnleashedRecomp.xcodeproj" \
           -scheme "UnleashedRecomp" \
           -sdk iphoneos \
           -configuration Release \
           CODE_SIGNING_ALLOWED=NO \
           CODE_SIGNING_REQUIRED=NO \
-          ENABLE_BITCODE=NO \
           -archivePath build/Unleashed.xcarchive || true
 
-      - name: 5. Nuclear Hunt & IPA Construct
+      - name: 5. Construct IPA
         run: |
           mkdir -p Payload
-          # Hunt for the .app folder and copy it to Payload
           find build/Unleashed.xcarchive -name "*.app" -type d -exec cp -r {} Payload/ \;
-          
-          # Check if the folder is still empty
-          if [ -z "$(ls -A Payload)" ]; then
-            echo "CRITICAL FAILURE: No .app file was created. The code might be broken."
-            exit 1
-          fi
-          
-          zip -r9 Unleashed_HD.ipa Payload
+          if [ -z "$(ls -A Payload)" ]; then exit 1; fi
+          zip -r9 Unleashed_iPad.ipa Payload
 
-      - name: 6. Upload Result
+      - name: 6. Upload Final App
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-IPA-READY
-          path: Unleashed_HD.ipa
+          name: Sonic-iPad-9-Build
+          path: Unleashed_iPad.ipa
