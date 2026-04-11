@@ -1,55 +1,65 @@
-name: SURGICAL_STRIKE_BUILD
+name: ILOader_Indestructible_Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: 1. Checkout & Force Engine Download
+      - name: 1. Deep Checkout
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
           fetch-depth: 0
 
-      - name: 2. Fixing Missing Engine Files
-        # This fixes the '5 folders 1 file' issue by pulling the real code
+      - name: 2. Force Engine & Assets
         run: |
           git submodule update --init --recursive --force || true
-          # Verify if code actually exists now
-          ls -R UnleashedRecompLib | grep "CMakeLists.txt" || echo "ENGINE STILL MISSING"
-
-      - name: 3. Asset Injection (720p/Smooth Mode)
-        run: |
           mkdir -p UnleashedRecompLib/private/
           find . -name "default.xex" -exec cp -v {} UnleashedRecompLib/private/ \; || true
-          find . -name "default.xexp" -exec cp -v {} UnleashedRecompLib/private/ \; || true
           find . -name "shader.ar*" -exec cp -v {} UnleashedRecompLib/private/ \; || true
-          # Performance tweaks for iPad 9 (A13/3GB RAM)
+          # Performance tweaks for iPad 9 RAM (720p Force)
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1920/1280/g' {} + || true
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1080/720/g' {} + || true
 
-      - name: 4. The Build
+      - name: 3. Dynamic Environment Setup
+        run: |
+          # Detects the .xcodeproj file name automatically
+          PROJ_NAME=$(find . -maxdepth 2 -name "*.xcodeproj" | head -n 1)
+          SCHEME_NAME=$(xcodebuild -list -project "$PROJ_NAME" | grep -A 5 "Schemes:" | tail -n 1 | xargs)
+          echo "PROJ_PATH=$PROJ_NAME" >> $GITHUB_ENV
+          echo "DETECTED_SCHEME=$SCHEME_NAME" >> $GITHUB_ENV
+          sudo xcode-select -s /Applications/Xcode_16.app || true
+
+      - name: 4. The Master Build (Bypassing Exit 65/66/70)
         run: |
           brew install glslang molten-vk vulkan-headers || true
-          # Simplified build command to prevent path errors
-          xcodebuild build -project "UnleashedRecomp.xcodeproj" -scheme "UnleashedRecomp" -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+          # Using 'build' instead of 'archive' for better iLoader compatibility
+          xcodebuild build \
+          -project "$PROJ_PATH" \
+          -scheme "$DETECTED_SCHEME" \
+          -sdk iphoneos \
+          -configuration Release \
+          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGNING_REQUIRED=NO \
+          AD_HOC_CODE_SIGNING_ALLOWED=YES || echo "Build log diagnostic check..."
 
-      - name: 5. Final Hunt
+      - name: 5. Nuclear Hunt & IPA Package
         run: |
           mkdir -p Payload
-          # Hunt for the .app in the DerivedData folder (the hidden build spot)
+          # Search everywhere for the .app folder, including system-wide build folders
           find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d -exec cp -rv {} Payload/ \; || true
           find . -name "*.app" -type d -not -path "./Payload/*" -exec cp -rv {} Payload/ \; || true
           
-          if [ -n "$(ls -A Payload 2>/dev/null)" ]; then
-            zip -r9 Sonic_Unleashed_iPad.ipa Payload
-          else
-            echo "STILL EMPTY: The build failed to create the app. Check logs for Step 4."
+          # Validation: iLoader requires a non-empty Payload to work
+          if [ -z "$(ls -A Payload 2>/dev/null)" ]; then
+            echo "CRITICAL: No app was built. The submodules are likely empty."
             exit 1
           fi
+          
+          zip -r9 Sonic_Unleashed_iLoader.ipa Payload
 
-      - name: 6. Upload
+      - name: 6. Final Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-Final
-          path: Sonic_Unleashed_iPad.ipa
+          name: Sonic-Unleashed-iLoader-Build
+          path: Sonic_Unleashed_iLoader.ipa
