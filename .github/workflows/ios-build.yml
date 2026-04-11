@@ -1,19 +1,26 @@
-name: ILOader_Indestructible_Build
+name: UNIVERSAL_FIX_BUILD
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: macos-latest
+    permissions:
+      contents: write # Specifically fixes Exit Code 128 (Permission Denied)
     steps:
-      - name: 1. Deep Checkout
+      - name: 1. Deep Clone & Reset
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
           fetch-depth: 0
 
-      - name: 2. Force Engine & Assets
+      - name: 2. Force Submodule Reset (Fixes Exit 128)
         run: |
-          git submodule update --init --recursive --force || true
+          # Sometimes Git gets stuck with a bad reference; this resets it
+          git submodule foreach --recursive "git checkout . && git clean -fdx" || true
+          git submodule update --init --recursive --force
+
+      - name: 3. Asset & Performance Injection
+        run: |
           mkdir -p UnleashedRecompLib/private/
           find . -name "default.xex" -exec cp -v {} UnleashedRecompLib/private/ \; || true
           find . -name "shader.ar*" -exec cp -v {} UnleashedRecompLib/private/ \; || true
@@ -21,45 +28,43 @@ jobs:
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1920/1280/g' {} + || true
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1080/720/g' {} + || true
 
-      - name: 3. Dynamic Environment Setup
+      - name: 4. Environment Discovery (Fixes Exit 70)
         run: |
-          # Detects the .xcodeproj file name automatically
-          PROJ_NAME=$(find . -maxdepth 2 -name "*.xcodeproj" | head -n 1)
-          SCHEME_NAME=$(xcodebuild -list -project "$PROJ_NAME" | grep -A 5 "Schemes:" | tail -n 1 | xargs)
-          echo "PROJ_PATH=$PROJ_NAME" >> $GITHUB_ENV
-          echo "DETECTED_SCHEME=$SCHEME_NAME" >> $GITHUB_ENV
+          # Exit Code 70 often means a missing build target or SDK mismatch
+          PROJ_FILE=$(find . -name "*.xcodeproj" | head -n 1)
+          SCHEME_NAME=$(xcodebuild -list -project "$PROJ_FILE" | grep -A 5 "Schemes:" | tail -n 1 | xargs)
+          echo "PROJ_FILE=$PROJ_FILE" >> $GITHUB_ENV
+          echo "SCHEME_NAME=$SCHEME_NAME" >> $GITHUB_ENV
           sudo xcode-select -s /Applications/Xcode_16.app || true
 
-      - name: 4. The Master Build (Bypassing Exit 65/66/70)
+      - name: 5. The Master Build
         run: |
           brew install glslang molten-vk vulkan-headers || true
-          # Using 'build' instead of 'archive' for better iLoader compatibility
-          xcodebuild build \
-          -project "$PROJ_PATH" \
-          -scheme "$DETECTED_SCHEME" \
+          # Forcing a clean and then a build to prevent legacy data errors
+          xcodebuild clean build \
+          -project "$PROJ_FILE" \
+          -scheme "$SCHEME_NAME" \
           -sdk iphoneos \
           -configuration Release \
           CODE_SIGNING_ALLOWED=NO \
           CODE_SIGNING_REQUIRED=NO \
-          AD_HOC_CODE_SIGNING_ALLOWED=YES || echo "Build log diagnostic check..."
+          AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      - name: 5. Nuclear Hunt & IPA Package
+      - name: 6. Nuclear Hunt & IPA Package
         run: |
           mkdir -p Payload
-          # Search everywhere for the .app folder, including system-wide build folders
           find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d -exec cp -rv {} Payload/ \; || true
           find . -name "*.app" -type d -not -path "./Payload/*" -exec cp -rv {} Payload/ \; || true
           
-          # Validation: iLoader requires a non-empty Payload to work
-          if [ -z "$(ls -A Payload 2>/dev/null)" ]; then
-            echo "CRITICAL: No app was built. The submodules are likely empty."
+          if [ -n "$(ls -A Payload 2>/dev/null)" ]; then
+            zip -r9 Sonic_Unleashed_Final.ipa Payload
+          else
+            echo "CRITICAL: No app was built. Check Step 5 logs."
             exit 1
           fi
-          
-          zip -r9 Sonic_Unleashed_iLoader.ipa Payload
 
-      - name: 6. Final Upload
+      - name: 7. Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-iLoader-Build
-          path: Sonic_Unleashed_iLoader.ipa
+          name: Sonic-Unleashed-FINAL
+          path: Sonic_Unleashed_Final.ipa
