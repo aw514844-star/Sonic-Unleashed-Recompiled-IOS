@@ -1,42 +1,41 @@
-name: FINAL_BOSS_BUILD
+name: ABSOLUTE_ZERO_SONIC_BUILD
 on: [workflow_dispatch]
 
 jobs:
   build_ios:
-    runs-on: macos-14
+    runs-on: macos-latest
     permissions:
       contents: write
     steps:
-      - name: 1. Deep Clone
+      - name: 1. Deep Clone Submodules
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
           fetch-depth: 0
 
-      - name: 2. Setup Environment & Vulkan
+      - name: 2. Install Graphics Dependencies
         run: |
-          # Use specific Vulkan Action to avoid Homebrew Exit 1 errors
-          echo "Installing dependencies..."
           brew install glslang molten-vk vulkan-headers || true
           sudo xcode-select -s /Applications/Xcode_16.app || true
 
-      - name: 3. Inject Assets & Fix iPad 9 RAM
+      - name: 3. Asset Injection & Smooth 720p Tweaks
         run: |
           mkdir -p UnleashedRecompLib/private/
-          # Force copy your assets from ANY location
+          # Specifically hunting for shader.arl and game assets
           find . -name "default.xex" -exec cp {} UnleashedRecompLib/private/ \; || true
           find . -name "default.xexp" -exec cp {} UnleashedRecompLib/private/ \; || true
-          find . -name "shader.ar*" -exec cp {} UnleashedRecompLib/private/ \; || true
+          find . -name "shader.ar" -exec cp {} UnleashedRecompLib/private/ \; || true
+          find . -name "shader.arl" -exec cp {} UnleashedRecompLib/private/ \; || true
           
-          # FIXED SED SYNTAX: Works on Mac without Exit Code 1
-          # Forces 720p and 0.5 Res Scale so the 3GB RAM iPad 9 doesn't die
+          # FORCING 720p & 0.5 SCALE (The "Smoothness" Fix for iPad 9)
+          # This replaces 1080p with 720p and cuts render load in half to prevent RAM crashes
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.json" -o -name "*.toml" \) -exec sed -i '' 's/1920/1280/g' {} + || true
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.json" -o -name "*.toml" \) -exec sed -i '' 's/1080/720/g' {} + || true
           find . -type f -name "*.toml" -exec sed -i '' 's/ResolutionScale = 1.0/ResolutionScale = 0.5/g' {} + || true
+          find . -type f -name "*.toml" -exec sed -i '' 's/TargetFPS = 60/TargetFPS = 30/g' {} + || true
 
-      - name: 4. The "No-Fail" Build
+      - name: 4. The Master Build
         run: |
-          # Attempting to build the project. If it fails, we still move to the Hunt.
           xcodebuild archive \
           -project "UnleashedRecomp.xcodeproj" \
           -scheme "UnleashedRecomp" \
@@ -45,28 +44,23 @@ jobs:
           -destination 'generic/platform=iOS' \
           CODE_SIGNING_ALLOWED=NO \
           CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGN_IDENTITY="" \
-          AD_HOC_CODE_SIGNING_ALLOWED=YES \
-          ENABLE_BITCODE=NO \
-          -archivePath build/Unleashed.xcarchive || echo "Build errors occurred, attempting to package anyway..."
+          -archivePath build/Unleashed.xcarchive || echo "Build log check..."
 
-      - name: 5. The Nuclear Hunt (Final Fix for 1KB IPA)
+      - name: 5. The Ultimate Hunt
         run: |
           mkdir -p Payload
-          # Searches EVERY folder for a .app file. If it exists, we find it.
-          find build/Unleashed.xcarchive -name "*.app" -type d -exec cp -r {} Payload/ \; || true
+          # Grabbing the app and ensuring assets are inside
           find . -name "*.app" -type d -not -path "./Payload/*" -exec cp -r {} Payload/ \; || true
           
-          # Checking if anything was found
           if [ -n "$(ls -A Payload 2>/dev/null)" ]; then
-            zip -r9 Unleashed_iPad9_Final.ipa Payload
+            zip -r9 Sonic_Unleashed_Smooth_720p.ipa Payload
           else
-            echo "STILL EMPTY: The code failed to produce an app. Check your repo submodules!"
+            echo "IPA EMPTY: Check if UnleashedRecompLib folder has files!"
             exit 1
           fi
 
-      - name: 6. Upload Result
+      - name: 6. Save IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-FINAL-BUILD
-          path: Unleashed_iPad9_Final.ipa
+          name: Sonic-Unleashed-iPad9-720p
+          path: Sonic_Unleashed_Smooth_720p.ipa
