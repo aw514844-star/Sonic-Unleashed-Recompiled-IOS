@@ -1,63 +1,57 @@
-name: SONIC_UNLEASHED_FIX_61
+name: TRY_62_ARCHIVE_FORCE
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: 1. Absolute Checkout
+      - name: 1. Clone & Submodules
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
           fetch-depth: 0
 
-      - name: 2. Setup Assets & iPad 9 Scaling
+      - name: 2. Setup Assets
         run: |
           git submodule update --init --recursive --force || true
           mkdir -p UnleashedRecompLib/private/
           find . -name "default.xex" -exec cp -v {} UnleashedRecompLib/private/ \; || true
           find . -name "shader.ar*" -exec cp -v {} UnleashedRecompLib/private/ \; || true
-          # 720p + 0.5 Scale Force (Vital for iPad 9 RAM)
-          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1920/1280/g' {} + || true
-          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1080/720/g' {} + || true
 
-      - name: 3. Boot Simulator & Set Dependencies
+      - name: 3. The "Unsigned Archive" (The Final Stand)
         run: |
-          # Booting the simulator early prevents the timeout part of Code 65
-          xcrun simctl boot "iPhone 15" || true
           brew install glslang molten-vk vulkan-headers || true
-
-      - name: 4. The "Zero-Resistance" Build (Kills Code 65)
-        run: |
           PROJ_FILE=$(find . -name "*.xcodeproj" | head -n 1)
           SCHEME_NAME=$(xcodebuild -list -project "$PROJ_FILE" | grep -A 5 "Schemes:" | tail -n 1 | xargs)
           
-          # This specific combination of flags kills signing and timeout errors
-          xcodebuild clean build \
+          # ARCHIVE instead of BUILD. This is the last way to kill Code 65.
+          xcodebuild archive \
           -project "$PROJ_FILE" \
           -scheme "$SCHEME_NAME" \
-          -destination "platform=iOS Simulator,name=iPhone 15" \
+          -sdk iphoneos \
+          -configuration Release \
+          -archivePath $PWD/build/Unleashed.xcarchive \
           CODE_SIGNING_ALLOWED=NO \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGN_IDENTITY="" \
           AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      - name: 5. Nuclear Hunt & iLoader Package
+      - name: 4. The Hunt & IPA Package
         run: |
           mkdir -p Payload
-          # Hunt for the .app in the specific Simulator Products folder
-          find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d -exec cp -rv {} Payload/ \; || true
-          find . -name "*.app" -type d -not -path "./Payload/*" -exec cp -rv {} Payload/ \; || true
+          # Archive puts the app in a very specific folder:
+          cp -rv build/Unleashed.xcarchive/Products/Applications/*.app Payload/ || true
           
           if [ -z "$(ls -A Payload 2>/dev/null)" ]; then
-            echo "STILL EMPTY: The build failed to produce an app."
-            exit 1
+            echo "STILL EMPTY: Trying emergency hunt..."
+            find . -name "*.app" -type d -not -path "./Payload/*" -exec cp -rv {} Payload/ \; || true
           fi
           
+          if [ -z "$(ls -A Payload 2>/dev/null)" ]; then exit 1; fi
           zip -r9 Sonic_Unleashed_iPad9.ipa Payload
 
-      - name: 6. Upload Final App
+      - name: 5. Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-FINAL
+          name: Sonic-Unleashed-Final-62
           path: Sonic_Unleashed_iPad9.ipa
