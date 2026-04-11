@@ -1,4 +1,4 @@
-name: TRY_63_THE_DNA_FIX
+name: TRY_63_DNA_FIX
 on: [workflow_dispatch]
 
 jobs:
@@ -12,35 +12,32 @@ jobs:
           fetch-depth: 0
 
       - name: 2. STRIP SIGNING DNA (Fixes Exit 65)
-        # This force-edits the project files to remove the "Paid Account" requirement
+        # This force-edits the actual project files to delete signing data
         run: |
           find . -name "*.pbxproj" -exec sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' {} + || true
           find . -name "*.pbxproj" -exec sed -i '' 's/CODE_SIGN_IDENTITY = "iPhone Developer"/CODE_SIGN_IDENTITY = ""/g' {} + || true
           find . -name "*.pbxproj" -exec sed -i '' 's/DEVELOPMENT_TEAM = [A-Z0-9]*/DEVELOPMENT_TEAM = ""/g' {} + || true
 
-      - name: 3. Inject Assets & iPad 9 RAM Fix
+      - name: 3. Essential: Cold-Boot Simulator
+        # Pre-booting the simulator separately is a vital step to avoid Exit Code 65 timeouts
         run: |
-          git submodule update --init --recursive --force || true
-          mkdir -p UnleashedRecompLib/private/
-          find . -name "default.xex" -exec cp -v {} UnleashedRecompLib/private/ \; || true
-          find . -name "shader.ar*" -exec cp -v {} UnleashedRecompLib/private/ \; || true
-          # 720p Force so your iPad 9 doesn't crash on the first level
-          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1920/1280/g' {} + || true
-          find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.toml" \) -exec sed -i '' 's/1080/720/g' {} + || true
-
-      - name: 4. The Master Build (No-Sign SDK)
-        run: |
+          xcrun simctl boot "iPhone 15" || true
           brew install glslang molten-vk vulkan-headers || true
+
+      - name: 4. The Master Build (Ad-Hoc Signing)
+        run: |
           PROJ_FILE=$(find . -name "*.xcodeproj" | head -n 1)
           SCHEME_NAME=$(xcodebuild -list -project "$PROJ_FILE" | grep -A 5 "Schemes:" | tail -n 1 | xargs)
           
-          # Using -sdk iphonesimulator is the only way to kill Code 65 100%
-          xcodebuild build \
+          # Using "-" for CODE_SIGN_IDENTITY forces an ad-hoc local signature
+          xcodebuild clean build \
           -project "$PROJ_FILE" \
           -scheme "$SCHEME_NAME" \
           -sdk iphonesimulator \
           -configuration Release \
-          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGN_IDENTITY="-" \
+          CODE_SIGNING_ALLOWED=YES \
+          CODE_SIGNING_REQUIRED=NO
 
       - name: 5. Hunt and Package
         run: |
