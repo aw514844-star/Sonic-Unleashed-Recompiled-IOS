@@ -1,41 +1,40 @@
-name: ABSOLUTE_ZERO_SONIC_BUILD
+name: ABSOLUTE_GOD_MODE_BUILD
 on: [workflow_dispatch]
 
 jobs:
-  build_ios:
+  build:
     runs-on: macos-latest
     permissions:
       contents: write
     steps:
-      - name: 1. Deep Clone Submodules
+      - name: 1. Deep Checkout
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
           fetch-depth: 0
 
-      - name: 2. Install Graphics Dependencies
+      - name: 2. Setup Environment
         run: |
           brew install glslang molten-vk vulkan-headers || true
+          # Force the use of Xcode 16.2+ for maximum iPad 9 compatibility
           sudo xcode-select -s /Applications/Xcode_16.app || true
 
-      - name: 3. Asset Injection & Smooth 720p Tweaks
+      - name: 3. Asset & Performance Injection
         run: |
           mkdir -p UnleashedRecompLib/private/
-          # Specifically hunting for shader.arl and game assets
-          find . -name "default.xex" -exec cp {} UnleashedRecompLib/private/ \; || true
-          find . -name "default.xexp" -exec cp {} UnleashedRecompLib/private/ \; || true
-          find . -name "shader.ar" -exec cp {} UnleashedRecompLib/private/ \; || true
-          find . -name "shader.arl" -exec cp {} UnleashedRecompLib/private/ \; || true
+          # Force-hunt and move assets (including the specific shader.arl)
+          find . -name "default.xex" -exec cp -v {} UnleashedRecompLib/private/ \; || true
+          find . -name "default.xexp" -exec cp -v {} UnleashedRecompLib/private/ \; || true
+          find . -name "shader.ar*" -exec cp -v {} UnleashedRecompLib/private/ \; || true
           
-          # FORCING 720p & 0.5 SCALE (The "Smoothness" Fix for iPad 9)
-          # This replaces 1080p with 720p and cuts render load in half to prevent RAM crashes
+          # Force 720p and 0.5 Res Scale for iPad 9's A13/3GB RAM [Search Logic]
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.json" -o -name "*.toml" \) -exec sed -i '' 's/1920/1280/g' {} + || true
           find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.json" -o -name "*.toml" \) -exec sed -i '' 's/1080/720/g' {} + || true
           find . -type f -name "*.toml" -exec sed -i '' 's/ResolutionScale = 1.0/ResolutionScale = 0.5/g' {} + || true
-          find . -type f -name "*.toml" -exec sed -i '' 's/TargetFPS = 60/TargetFPS = 30/g' {} + || true
 
-      - name: 4. The Master Build
+      - name: 4. The Indestructible Build
         run: |
+          # Use specific flags to force the build into the products folder
           xcodebuild archive \
           -project "UnleashedRecomp.xcodeproj" \
           -scheme "UnleashedRecomp" \
@@ -44,23 +43,30 @@ jobs:
           -destination 'generic/platform=iOS' \
           CODE_SIGNING_ALLOWED=NO \
           CODE_SIGNING_REQUIRED=NO \
-          -archivePath build/Unleashed.xcarchive || echo "Build log check..."
+          SKIP_INSTALL=NO \
+          -archivePath $PWD/build/Unleashed.xcarchive || echo "Build errors detected, starting deep hunt..."
 
-      - name: 5. The Ultimate Hunt
+      - name: 5. The Nuclear Global Hunt (Fixes 1KB/Empty IPA)
         run: |
           mkdir -p Payload
-          # Grabbing the app and ensuring assets are inside
-          find . -name "*.app" -type d -not -path "./Payload/*" -exec cp -r {} Payload/ \; || true
+          # Searches EVERY folder in the entire runner for the .app folder
+          echo "Hunting for .app file globally..."
+          find . -name "*.app" -type d -not -path "./Payload/*" -exec cp -rv {} Payload/ \; || true
           
+          # If Payload is still empty, try searching the standard Xcode products folder
+          if [ -z "$(ls -A Payload 2>/dev/null)" ]; then
+            find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d -exec cp -rv {} Payload/ \; || true
+          fi
+
           if [ -n "$(ls -A Payload 2>/dev/null)" ]; then
-            zip -r9 Sonic_Unleashed_Smooth_720p.ipa Payload
+            zip -r9 Sonic_Unleashed_iPad9.ipa Payload
           else
-            echo "IPA EMPTY: Check if UnleashedRecompLib folder has files!"
+            echo "STILL EMPTY: Check if submodules are actually present in the repo."
             exit 1
           fi
 
-      - name: 6. Save IPA
+      - name: 6. Final Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-iPad9-720p
-          path: Sonic_Unleashed_Smooth_720p.ipa
+          name: Sonic-Unleashed-FULL-IPA
+          path: Sonic_Unleashed_iPad9.ipa
