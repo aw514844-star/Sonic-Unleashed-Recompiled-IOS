@@ -1,4 +1,4 @@
-name: Ultimate No-Error Build
+name: Fixed Sonic Build
 on: [workflow_dispatch]
 
 permissions:
@@ -13,45 +13,44 @@ jobs:
         with:
           submodules: 'recursive'
 
-      - name: 2. Inject Assets
+      - name: 2. Force Assets to Private Folder
         run: |
-          # Create the required private folder for assets
           mkdir -p ./UnleashedRecompLib/private/
-          
-          # Force copy your assets from 'game_files' into the build area
-          # This handles the default.xex, shader.ar, and shader.arl requirements
-          cp game_files/default.xex ./UnleashedRecompLib/private/ || true
-          cp game_files/shader.ar ./UnleashedRecompLib/private/ || true
-          cp game_files/shader.arl ./UnleashedRecompLib/private/ || true
-          
-          # Move Title Update files if present
-          cp game_files/default.xexp ./UnleashedRecompLib/private/ || true
+          # Copy your files from ANY folder they might be in
+          cp -v default.xex ./UnleashedRecompLib/private/ || cp -v game_files/default.xex ./UnleashedRecompLib/private/ || true
+          cp -v default.xexp ./UnleashedRecompLib/private/ || cp -v game_files/default.xexp ./UnleashedRecompLib/private/ || true
+          cp -v shader.ar ./UnleashedRecompLib/private/ || cp -v game_files/shader.ar ./UnleashedRecompLib/private/ || true
+          cp -v shader.arl ./UnleashedRecompLib/private/ || cp -v game_files/shader.arl ./UnleashedRecompLib/private/ || true
 
       - name: 3. Set Xcode 16
         run: sudo xcode-select -s /Applications/Xcode_16.app || true
 
-      - name: 4. Build and Bypass Errors
+      - name: 4. Master Build
         run: |
-          # Use '|| true' to kill exit codes 1, 65, 66, 70
           xcodebuild archive \
           -scheme "UnleashedRecomp" \
           -sdk iphoneos \
           -configuration Release \
           CODE_SIGNING_ALLOWED=NO \
           CODE_SIGNING_REQUIRED=NO \
-          ENABLE_BITCODE=NO \
           -archivePath build/Unleashed.xcarchive || true
 
-      - name: 5. Construct IPA
+      - name: 5. Hunt and Package IPA
         run: |
           mkdir -p Payload
-          # Search for the app file even if build had minor issues
-          find build/Unleashed.xcarchive -name "*.app" -exec cp -r {} Payload/ \; || true
-          zip -r Unleashed_HD.ipa Payload || true
+          # Search everywhere for the .app folder so we don't get a 1KB file
+          find build/Unleashed.xcarchive -name "*.app" -type d -exec cp -r {} Payload/ \;
+          
+          # Check if Payload is empty and show error if so
+          if [ -z "$(ls -A Payload)" ]; then
+            echo "BUILD FAILED: No app found. IPA will be empty!"
+            exit 1
+          fi
+          
+          zip -r Unleashed_HD.ipa Payload
 
-      - name: 6. Save IPA Artifact
+      - name: 6. Upload Result
         uses: actions/upload-artifact@v4
         with:
           name: Sonic-Unleashed-HD-iPad
           path: Unleashed_HD.ipa
-          if-no-files-found: error # Only errors if NO app was found at all
