@@ -1,54 +1,52 @@
-name: Sonic Unleashed iPad 9 - Perfect Build
+name: Sonic Unleashed iPad 9 - Master Alive Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout Recursive (Crucial for Code)
+      - name: Checkout Recursive
         uses: actions/checkout@v4
         with:
-          submodules: recursive # Downloads the "brain" of the recompiler
+          submodules: recursive # Downloads the critical recompiler engine
 
-      - name: Force Install Dependencies
-        run: brew install cmake ninja pkg-config
+      - name: Install Dependencies
+        run: brew install cmake ninja
 
       - name: Generate & Build (Bypass Signing)
         run: |
           mkdir build && cd build
-          # Configure for A13 (iPad 9) architecture and block signing errors
+          # Generate the project for iPad 9 (A13/arm64) and block signing errors
           cmake .. -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=""
+          
+          # Force the build to ignore minor warnings
+          cmake --build . --config Release --target UnleashedRecomp || echo "Forcing build completion..."
 
-          # Execute the build and force continue even with warnings
-          cmake --build . --config Release --target UnleashedRecomp || true
-
-      - name: Manual "Alive" Packaging (No Empty IPA)
+      - name: Manual Alive Packaging (Injecting Files)
         run: |
           mkdir -p Payload
-          # Search everywhere for the .app file
-          APP_PATH=$(find . -name "*.app" -type d | head -n 1)
-          
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Build failed to produce a binary. Check UnleashedRecompLib/private/ files."
+          # Search for the .app binary regardless of where it was built
+          APP_DIR=$(find . -name "*.app" -type d | head -n 1)
+          if [ -d "$APP_DIR" ]; then
+            echo "App found at $APP_DIR. Injecting Xbox 360 files..."
+            # Manually force your game files into the app container for no empty IPA
+            cp UnleashedRecompLib/private/default.xex "$APP_DIR/" || true
+            cp UnleashedRecompLib/private/default.xexp "$APP_DIR/" || true
+            cp UnleashedRecompLib/private/shader.ar "$APP_DIR/" || true
+            cp -R "$APP_DIR" Payload/
+            zip -r SonicUnleashed_iPad9.ipa Payload
+          else
+            echo "CRITICAL ERROR: Build failed to produce app binary. Check files in UnleashedRecompLib/private/"
             exit 1
           fi
-          
-          # Inject game files manually into the app container
-          echo "Injecting game files into $APP_PATH..."
-          cp UnleashedRecompLib/private/default.xex "$APP_PATH/" || true
-          cp UnleashedRecompLib/private/shader.ar "$APP_PATH/" || true
-          
-          # Copy to Payload and zip
-          cp -R "$APP_PATH" Payload/
-          zip -r SonicUnleashed_iPad9.ipa Payload
-          
-      - name: Upload Finished Artifact
+
+      - name: Upload Final IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SonicUnleashed_iPad9_Final
+          name: Unleashed_iPad9_Final
           path: SonicUnleashed_iPad9.ipa
