@@ -1,4 +1,4 @@
-name: Nerun Metal - Final Recovery Build
+name: Nerun Metal - Freetype Fix
 on: [workflow_dispatch]
 
 jobs:
@@ -10,22 +10,25 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Dependencies
-        run: brew install cmake ninja
+      - name: Install Missing Libraries
+        run: |
+          # Fixing the 'Could NOT find Freetype' error
+          brew install cmake ninja freetype zlib libpng
 
-      - name: Build Metal Binary (Force Output)
+      - name: Build Metal Binary (With Library Paths)
         shell: bash
         run: |
-          # Create a dedicated build directory
           mkdir -p build_ios
           
-          # Generate Xcode project specifically for iOS
+          # Pointing CMake directly to the Homebrew Freetype location
           cmake -S . -B build_ios -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
-            -DENABLE_METAL=ON
+            -DENABLE_METAL=ON \
+            -DFREETYPE_INCLUDE_DIRS=$(brew --prefix freetype)/include/freetype2 \
+            -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.dylib
 
-          # Build it - explicitly telling it where to put the result
+          # The build step
           xcodebuild build \
             -project build_ios/*.xcodeproj \
             -scheme UnleashedRecomp \
@@ -35,23 +38,17 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
           
-          # Force a 0 exit code only for your specific blocked codes
           if [[ " 1 65 66 70 128 " =~ " $? " ]]; then exit 0; fi
 
-      - name: Verify and Package (Prevents 1KB IPA)
+      - name: Verify and Package
         run: |
           mkdir -p package/Payload
-          
-          # Look specifically in the derived data folder we just created
           APP_PATH=$(find ./final_output -name "*.app" -type d | head -n 1)
           
-          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
-            echo "CRITICAL ERROR: No .app file found! The compiler failed."
-            exit 1 # This stops the action so you don't get a 1KB file
+          if [ -z "$APP_PATH" ]; then
+            echo "CRITICAL: Build failed to create .app."
+            exit 1
           fi
-          
-          echo "App found at $APP_PATH. Size check:"
-          du -sh "$APP_PATH"
           
           cp -r "$APP_PATH" package/Payload/
           cd package && zip -r ../Unleashed_Metal.ipa Payload
