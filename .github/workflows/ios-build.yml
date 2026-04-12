@@ -1,4 +1,4 @@
-name: Nerun Metal - PRE-SOLVED 97
+name: Nerun Metal - ZERO-SCAN 98
 on: [workflow_dispatch]
 
 env:
@@ -16,18 +16,19 @@ jobs:
       - name: 2. Deps
         run: brew install cmake ninja freetype sdl2 libpng zlib || true
 
-      - name: 3. Pre-Solved Project Generation
+      - name: 3. Zero-Scan Project Generation
         shell: bash
         run: |
           mkdir -p build_ios
-          # We manually set EVERY result that causes the scan to crash
+          # We are manually 'solving' the scan so it NEVER runs the test programs
           cmake -S . -B build_ios -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
             -DENABLE_METAL=ON -DCMAKE_C_COMPILER_WORKS=1 -DCMAKE_CXX_COMPILER_WORKS=1 \
-            -DHAVE_ABS=1 -DHAVE_QSORT=1 -DHAVE_BSEARCH=1 \
-            -DHAVE_SETENV=1 -DHAVE_UNSETENV=1 -DHAVE_PUTENV=1 \
-            -DHAVE_MALLOC=1 -DHAVE_FREE=1 -DHAVE_CALLOC=1 -DHAVE_REALLOC=1 \
-            -DHAVE_STRTOD=1 -DHAVE_MPROTECT=1 -DHAVE_SIGNAL=1 -DHAVE_GETENV=1 \
+            -DHAVE_ABS=1 -DHAVE_QSORT=1 -DHAVE_BSEARCH=1 -DHAVE_SETENV=1 \
+            -DHAVE_UNSETENV=1 -DHAVE_PUTENV=1 -DHAVE_MALLOC=1 -DHAVE_FREE=1 \
+            -DHAVE_CALLOC=1 -DHAVE_REALLOC=1 -DHAVE_STRTOD=1 -DHAVE_MPROTECT=1 \
+            -DHAVE_SIGNAL=1 -DHAVE_GETENV=1 -DHAVE_MEMSET=1 -DHAVE_MEMCPY=1 \
+            -DHAVE_STRLCPY=1 -DHAVE_STRLCAT=1 -DHAVE_STRLWR=0 -DHAVE_STRUPR=0 \
             -DFREETYPE_INCLUDE_DIRS=$(brew --prefix freetype)/include/freetype2 \
             -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.dylib
 
@@ -47,10 +48,10 @@ jobs:
           APP_PATH=$(find . -name "*.app" -type d | grep -v "Payload" | head -n 1)
           if [ -z "$APP_PATH" ]; then exit 1; fi
           cp -r "$APP_PATH" package/Payload/
-          cd package && zip -r ../Unleashed_Metal_97.ipa Payload
+          cd package && zip -r ../Unleashed_Metal_98.ipa Payload
 
       - name: 6. Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Nerun-Metal-iPad-97
-          path: Unleashed_Metal_97.ipa
+          name: Nerun-Metal-iPad-98
+          path: Unleashed_Metal_98.ipa
