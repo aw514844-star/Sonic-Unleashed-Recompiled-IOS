@@ -1,4 +1,4 @@
-name: Sonic Unleashed iPad 9 - Final Fix
+name: Sonic Unleashed iPad 9 Final Fix
 on: [workflow_dispatch]
 
 jobs:
@@ -8,38 +8,47 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          submodules: recursive # Critical to pull in required recompiler tools
+          submodules: recursive # Ensures all recompiler tools are downloaded
 
-      - name: Build Optimized for A13
+      - name: Auto-Detect and Build
         run: |
-          # Finds project name automatically and builds to a specific folder
-          PROJ=$(find . -name "*.xcodeproj" | head -n 1)
+          # 1. Find the project file automatically
+          PROJECT_FILE=$(find . -name "*.xcodeproj" | head -n 1)
+          # 2. Extract the iOS scheme name
+          SCHEME_NAME=$(xcodebuild -list -project "$PROJECT_FILE" | grep -i "iOS" | xargs | head -n 1)
+          
+          echo "Building Project: $PROJECT_FILE with Scheme: $SCHEME_NAME"
+          
+          # 3. Build to a specific 'build_output' folder
           xcodebuild build \
-            -project "$PROJ" \
-            -scheme "UnleashedRecomp-iOS" \
+            -project "$PROJECT_FILE" \
+            -scheme "$SCHEME_NAME" \
             -sdk iphoneos \
             -configuration Release \
-            -derivedDataPath "output" \
+            -derivedDataPath "build_output" \
             ARCHS="arm64" \
-            GCC_OPTIMIZATION_LEVEL="fast" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" || echo "Ignoring expected build warnings..."
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER="" || echo "Ignoring expected signing warnings."
 
       - name: Manual Payload Package
         run: |
           mkdir -p Payload
-          # Search deep in the output folder for the .app binary
-          APP_PATH=$(find output -name "*.app" -type d | head -n 1)
+          # Search for the .app file in the new output folder
+          APP_PATH=$(find build_output -name "*.app" -type d | head -n 1)
+          
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Build failed to create an app file. Check UnleashedRecompLib/private/ files."
+            echo "ERROR: The build failed to create an .app file. Verify your game files are in UnleashedRecompLib/private/"
             exit 1
           fi
+          
+          echo "Found app at $APP_PATH. Packaging..."
           cp -R "$APP_PATH" Payload/
           zip -r SonicUnleashed_iPad9.ipa Payload
           
       - name: Upload Working IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed_iPad9_Working
+          name: SonicUnleashed_iPad9
           path: SonicUnleashed_iPad9.ipa
