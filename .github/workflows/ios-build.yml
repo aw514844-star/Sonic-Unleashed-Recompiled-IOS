@@ -1,49 +1,48 @@
-name: Manual iPad 9 Build Fix
+name: Sonic Unleashed Universal Fix
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Force Checkout with Submodules
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Build Command (Ignore Signing)
+      - name: Force Build Anything Found
         run: |
-          # We force the build into a dedicated 'manual_output' folder
+          # 1. Find the project and scheme automatically
+          PROJ=$(find . -name "*.xcodeproj" | head -n 1)
+          SCHEME=$(xcodebuild -list -project "$PROJ" | grep "iOS" | xargs | head -n 1)
+          
+          # 2. Build to a specific folder we create right now
+          mkdir -p output_folder
           xcodebuild build \
-            -project *.xcodeproj \
-            -scheme "UnleashedRecomp-iOS" \
+            -project "$PROJ" \
+            -scheme "$SCHEME" \
             -sdk iphoneos \
             -configuration Release \
-            -derivedDataPath "manual_output" \
-            ARCHS="arm64" \
+            -derivedDataPath "output_folder" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" || echo "Build finished with expected warnings."
+            CODE_SIGN_IDENTITY="" || echo "Ignoring errors..."
 
-      - name: Force Manual Packaging
+      - name: Force Zip
         run: |
-          # 1. Create the Payload folder
           mkdir -p Payload
-          
-          # 2. MANUALLY search and copy the .app file
-          # We use a broad search to find the app regardless of name
-          find manual_output -name "*.app" -type d -exec cp -R {} Payload/ \;
-          
-          # 3. Check if Payload actually has the app
-          if [ -z "$(ls -A Payload)" ]; then
-            echo "ERROR: Manual search failed to find any built app."
+          # Search everywhere for the .app folder and copy it
+          APP=$(find output_folder -name "*.app" -type d | head -n 1)
+          if [ -d "$APP" ]; then
+            cp -R "$APP" Payload/
+            zip -r Unleashed_iPad9.ipa Payload
+          else
+            echo "STILL NO APP FOUND. Check if your game files are in UnleashedRecompLib/private/"
             exit 1
           fi
           
-          # 4. Zip into IPA
-          zip -r SonicUnleashed_iPad9_Manual.ipa Payload
-          
-      - name: Upload Result
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: SonicUnleashed_iPad9
-          path: SonicUnleashed_iPad9_Manual.ipa
+          name: Unleashed_iPad9_Final
+          path: Unleashed_iPad9.ipa
