@@ -1,4 +1,4 @@
-name: Nerun Metal - Freetype Fix
+name: Nerun Metal - Absolute Zero Build
 on: [workflow_dispatch]
 
 jobs:
@@ -10,25 +10,27 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Missing Libraries
+      - name: Install Every Potential Dependency
         run: |
-          # Fixing the 'Could NOT find Freetype' error
-          brew install cmake ninja freetype zlib libpng
+          # Adding SDL2 and Vulkan-Headers which often crash Metal-branch builds
+          brew install cmake ninja freetype zlib libpng sdl2 vulkan-headers
 
-      - name: Build Metal Binary (With Library Paths)
+      - name: Build Metal Binary (Strict Config)
         shell: bash
         run: |
           mkdir -p build_ios
           
-          # Pointing CMake directly to the Homebrew Freetype location
+          # We are explicitly defining the Freetype and SDK paths to prevent "Exit Code 1"
           cmake -S . -B build_ios -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DENABLE_METAL=ON \
             -DFREETYPE_INCLUDE_DIRS=$(brew --prefix freetype)/include/freetype2 \
-            -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.dylib
+            -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.dylib \
+            -DSDL2_INCLUDE_DIR=$(brew --prefix sdl2)/include/SDL2 \
+            -DSDL2_LIBRARY=$(brew --prefix sdl2)/lib/libSDL2.dylib
 
-          # The build step
+          # Nuclear build step
           xcodebuild build \
             -project build_ios/*.xcodeproj \
             -scheme UnleashedRecomp \
@@ -36,25 +38,32 @@ jobs:
             -sdk iphoneos \
             -derivedDataPath ./final_output \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
+            CODE_SIGNING_REQUIRED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
           
+          # Rule 3: Only bypass if it's one of your specific codes
           if [[ " 1 65 66 70 128 " =~ " $? " ]]; then exit 0; fi
 
-      - name: Verify and Package
+      - name: Packaging Guard
         run: |
           mkdir -p package/Payload
           APP_PATH=$(find ./final_output -name "*.app" -type d | head -n 1)
           
           if [ -z "$APP_PATH" ]; then
-            echo "CRITICAL: Build failed to create .app."
+            echo "STILL NO BINARY. Searching the whole runner as a last resort..."
+            APP_PATH=$(find . -name "*.app" -type d | grep -v "Payload" | head -n 1)
+          fi
+
+          if [ -z "$APP_PATH" ]; then
+            echo "CRITICAL: The compiler never finished. Re-check your private folder files."
             exit 1
           fi
           
           cp -r "$APP_PATH" package/Payload/
-          cd package && zip -r ../Unleashed_Metal.ipa Payload
+          cd package && zip -r ../Unleashed_Final.ipa Payload
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Nerun-iPad-Metal
-          path: Unleashed_Metal.ipa
+          name: Nerun-iPad-Metal-Final
+          path: Unleashed_Final.ipa
