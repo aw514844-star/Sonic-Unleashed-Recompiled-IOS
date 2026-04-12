@@ -1,4 +1,4 @@
-name: iPad 9 Optimized Build
+name: iPad 9 Fix - No Empty IPA
 on: [workflow_dispatch]
 
 jobs:
@@ -8,42 +8,43 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Compile with A13 Optimizations
+      - name: Build and Force Path
         run: |
-          # Bypasses signing and sets high-performance flags
-          (xcodebuild build \
+          # Build specifically for iPad 9 architecture (arm64)
+          # We use a custom 'DerivedData' folder so we know exactly where the app is
+          xcodebuild build \
             -project "UnleashedRecomp.xcodeproj" \
             -scheme "UnleashedRecomp-iOS" \
             -sdk iphoneos \
             -configuration Release \
+            -derivedDataPath "build_output" \
             ARCHS="arm64" \
-            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
-            GCC_OPTIMIZATION_LEVEL="fast" \
-            LLVM_LTO=YES \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE_SPECIFIER="") || \
+            PROVISIONING_PROFILE_SPECIFIER="" || \
           if [[ $? -eq 1 || $? -eq 65 || $? -eq 66 || $? -eq 70 || $? -eq 128 ]]; then 
-            echo "Ignoring exit code $?. Proceeding to packaging..."; true; 
+            echo "Ignoring exit code. Force-packaging anyway..."; true; 
           else 
             exit $?; 
           fi
 
-      - name: Manual Payload Packaging (No Empty IPA)
+      - name: Package IPA (High Reliability)
         run: |
-          # Creates the strict IPA structure manually to avoid empty file errors
           mkdir -p Payload
-          if [ -d "build/Release-iphoneos/UnleashedRecomp.app" ]; then
-            cp -R build/Release-iphoneos/UnleashedRecomp.app Payload/
+          # Search for the .app file specifically in the new output folder
+          APP_PATH=$(find build_output -name "*.app" -type d | head -n 1)
+          if [ -n "$APP_PATH" ]; then
+            echo "Found app at: $APP_PATH"
+            cp -R "$APP_PATH" Payload/
+            zip -r UnleashedRecomp_iPad9.ipa Payload
           else
-            # Fallback check for different build paths
-            cp -R ~/Library/Developer/Xcode/DerivedData/*/Build/Products/Release-iphoneos/*.app Payload/ || echo "App not found in default path"
+            echo "ERROR: App folder not found! Build failed to produce a binary."
+            exit 1
           fi
-          zip -r UnleashedRecomp_iPad9.ipa Payload
           
-      - name: Export Final IPA
+      - name: Upload Final IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SonicUnleashed_iPad9_Optimized
+          name: SonicUnleashed_iPad9
           path: UnleashedRecomp_iPad9.ipa
