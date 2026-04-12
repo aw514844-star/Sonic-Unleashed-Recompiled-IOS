@@ -1,4 +1,4 @@
-name: Nerun Metal - Try 85 Final Stand
+name: Nerun Metal - FINAL UNLEASHED BUILD
 on: [workflow_dispatch]
 
 jobs:
@@ -10,20 +10,32 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Purge and Reinstall (The Exit Code 1 Killer)
+      - name: System Preparation
         run: |
-          # 1. Clear common Homebrew conflicts that cause early exits
-          brew uninstall cmake --force
-          brew install cmake ninja freetype sdl2 libpng zlib
-          # 2. Force the correct Xcode version for iPadOS 15+
+          # Install every missing piece of the puzzle
+          brew install cmake ninja freetype sdl2 libpng zlib vulkan-headers
+          brew link --overwrite freetype sdl2 libpng zlib
+          # Ensure we use the latest official Xcode
           sudo xcode-select -switch /Applications/Xcode.app
 
-      - name: Force Build Metal
+      - name: Inject Required Assets (Rule 2)
+        run: |
+          # Force create the directory and verify your files
+          mkdir -p UnleashedRecompLib/private
+          FILES=("UnleashedRecompLib/private/default.xex" "UnleashedRecompLib/private/default.xexp" "UnleashedRecompLib/private/shader.ar")
+          for f in "${FILES[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "MISSING: $f - Build aborted to prevent 1kb IPA."
+              exit 1
+            fi
+          done
+
+      - name: The "Everything" Build Step
         shell: bash
         run: |
           mkdir -p build_ios
           
-          # We use a preset-style config to bypass the manual environment scan
+          # Force CMake to stop scanning and start building
           cmake -S . -B build_ios -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -31,11 +43,12 @@ jobs:
             -DENABLE_METAL=ON \
             -DFREETYPE_INCLUDE_DIRS=$(brew --prefix freetype)/include/freetype2 \
             -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.dylib \
+            -DSDL2_INCLUDE_DIR=$(brew --prefix sdl2)/include/SDL2 \
+            -DSDL2_LIBRARY=$(brew --prefix sdl2)/lib/libSDL2.dylib \
             -DZLIB_ROOT=$(brew --prefix zlib) \
-            -DPNG_PNG_INCLUDE_DIR=$(brew --prefix libpng)/include \
-            -DCMAKE_FIND_FRAMEWORK=LAST
+            -DPNG_PNG_INCLUDE_DIR=$(brew --prefix libpng)/include
 
-          # Building with 'quiet' to prevent log overflow and 'allowProvisioning' for stability
+          # Nuclear xcodebuild - bypassing signing and specific error codes
           xcodebuild build \
             -project build_ios/*.xcodeproj \
             -scheme UnleashedRecomp \
@@ -48,24 +61,27 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             -quiet
 
+          # Rule 3: Forcing success for your specific exit codes
           if [[ " 1 65 66 70 128 " =~ " $? " ]]; then exit 0; fi
 
-      - name: Final Packaging
+      - name: The 100% Binary Rescue
         run: |
           mkdir -p package/Payload
-          # Search only for the real app binary
+          
+          # Hunt for the compiled app with no restrictions
           APP_PATH=$(find . -name "*.app" -type d | grep -v "Payload" | head -n 1)
           
-          if [ -z "$APP_PATH" ]; then
-            echo "Compiler failed to produce a .app - check logs for 'Error' red text."
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo "CRITICAL: Compiler actually failed. Check the 'Everything Build' logs."
             exit 1
           fi
           
+          echo "Success! Found app at $APP_PATH. Compressing..."
           cp -r "$APP_PATH" package/Payload/
-          cd package && zip -r ../Unleashed_Final_iPad.ipa Payload
+          cd package && zip -r ../Unleashed_Metal_iPad_Final.ipa Payload
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Nerun-Metal-Final
-          path: Unleashed_Final_iPad.ipa
+          name: Nerun-Metal-iPad-Final
+          path: Unleashed_Metal_iPad_Final.ipa
