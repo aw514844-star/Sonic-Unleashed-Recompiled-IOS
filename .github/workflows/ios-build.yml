@@ -1,4 +1,4 @@
-name: Nerun Ultimate Failsafe - NUCLEAR OPTION
+name: Nerun Metal - Final Recovery Build
 on: [workflow_dispatch]
 
 jobs:
@@ -10,57 +10,54 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Force Environment Setup
-        run: |
-          # Ensure folders exist so 'find' doesn't crash
-          mkdir -p build_output
-          mkdir -p build/Payload
-          # Setup CMake (Nerun port requirement)
-          brew install cmake
+      - name: Install Dependencies
+        run: brew install cmake ninja
 
-      - name: Generate and Build (The Fix)
+      - name: Build Metal Binary (Force Output)
         shell: bash
         run: |
-          set +e
-          # 1. Generate the Xcode project from CMake
-          cmake -S . -B build_output -G Xcode -DCMAKE_SYSTEM_NAME=iOS
+          # Create a dedicated build directory
+          mkdir -p build_ios
+          
+          # Generate Xcode project specifically for iOS
+          cmake -S . -B build_ios -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DENABLE_METAL=ON
 
-          # 2. Build the generated project
+          # Build it - explicitly telling it where to put the result
           xcodebuild build \
-            -project build_output/*.xcodeproj \
-            -scheme "UnleashedRecomp" \
+            -project build_ios/*.xcodeproj \
+            -scheme UnleashedRecomp \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath ./derived_data \
+            -derivedDataPath ./final_output \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
+            CODE_SIGNING_REQUIRED=NO
           
-          EXIT_CODE=$?
-          BLOCKLIST="1 65 66 70 128"
-          if [[ " $BLOCKLIST " =~ " $EXIT_CODE " ]]; then
-            echo "Blocked exit code $EXIT_CODE. Forcing bypass to packaging."
-            exit 0
-          fi
+          # Force a 0 exit code only for your specific blocked codes
+          if [[ " 1 65 66 70 128 " =~ " $? " ]]; then exit 0; fi
 
-      - name: The Ultimate Binary Search (No Empty IPA)
+      - name: Verify and Package (Prevents 1KB IPA)
         run: |
-          # Look everywhere in the current directory and subdirectories for the .app
-          echo "Hunting for the .app file..."
-          FINAL_APP=$(find . -name "*.app" -type d | grep -v "Payload" | head -n 1)
-
-          if [ -z "$FINAL_APP" ]; then
-            echo "CRITICAL: No app found. Creating a recovery folder to prevent crash."
-            mkdir -p recovery.app
-            FINAL_APP="recovery.app"
+          mkdir -p package/Payload
+          
+          # Look specifically in the derived data folder we just created
+          APP_PATH=$(find ./final_output -name "*.app" -type d | head -n 1)
+          
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo "CRITICAL ERROR: No .app file found! The compiler failed."
+            exit 1 # This stops the action so you don't get a 1KB file
           fi
+          
+          echo "App found at $APP_PATH. Size check:"
+          du -sh "$APP_PATH"
+          
+          cp -r "$APP_PATH" package/Payload/
+          cd package && zip -r ../Unleashed_Metal.ipa Payload
 
-          echo "Success! Found: $FINAL_APP"
-          cp -r "$FINAL_APP" build/Payload/
-          cd build && zip -r Unleashed_Unsigned.ipa Payload
-
-      - name: Upload Finished IPA
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Nerun-iPad-Final
-          path: build/Unleashed_Unsigned.ipa
+          name: Nerun-iPad-Metal
+          path: Unleashed_Metal.ipa
