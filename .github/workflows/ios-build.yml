@@ -1,48 +1,46 @@
-name: Sonic Unleashed Universal Fix
+name: Sonic Unleashed iPad 9 - Hard Copy Fix
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout
+      - name: Checkout with Submodules
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: recursive # Critical for recompilation logic
 
-      - name: Force Build Anything Found
+      - name: Setup & Build
         run: |
-          # 1. Find the project and scheme automatically
-          PROJ=$(find . -name "*.xcodeproj" | head -n 1)
-          SCHEME=$(xcodebuild -list -project "$PROJ" | grep "iOS" | xargs | head -n 1)
+          mkdir build && cd build
+          # Generate Xcode project with A13 (arm64) target
+          cmake .. -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
           
-          # 2. Build to a specific folder we create right now
-          mkdir -p output_folder
-          xcodebuild build \
-            -project "$PROJ" \
-            -scheme "$SCHEME" \
-            -sdk iphoneos \
-            -configuration Release \
-            -derivedDataPath "output_folder" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" || echo "Ignoring errors..."
+          # Build the main game target
+          cmake --build . --config Release --target UnleashedRecomp
 
-      - name: Force Zip
+      - name: Inject Game Files (Manual Force)
+        run: |
+          # Locate the .app folder
+          APP_PATH=$(find build -name "UnleashedRecomp.app" -type d | head -n 1)
+          
+          # Manually copy your private files into the .app/
+          # This ensures the IPA is NOT empty
+          echo "Injecting files into $APP_PATH"
+          cp UnleashedRecompLib/private/default.xex "$APP_PATH/"
+          cp UnleashedRecompLib/private/default.xexp "$APP_PATH/"
+          cp UnleashedRecompLib/private/shader.ar "$APP_PATH/"
+          
+      - name: Package IPA
         run: |
           mkdir -p Payload
-          # Search everywhere for the .app folder and copy it
-          APP=$(find output_folder -name "*.app" -type d | head -n 1)
-          if [ -d "$APP" ]; then
-            cp -R "$APP" Payload/
-            zip -r Unleashed_iPad9.ipa Payload
-          else
-            echo "STILL NO APP FOUND. Check if your game files are in UnleashedRecompLib/private/"
-            exit 1
-          fi
+          APP_PATH=$(find build -name "UnleashedRecomp.app" -type d | head -n 1)
+          cp -R "$APP_PATH" Payload/
+          zip -r SonicUnleashed_iPad9.ipa Payload
           
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed_iPad9_Final
-          path: Unleashed_iPad9.ipa
+          name: SonicUnleashed_iPad9_Final
+          path: SonicUnleashed_iPad9.ipa
