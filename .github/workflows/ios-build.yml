@@ -10,12 +10,12 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Asset Verification (Rule 2)
+           - name: Asset Verification (Rule 2)
         run: |
           REQUIRED_FILES=(
-            "UnleashedRecompLib/Private/default.xex" 
-            "UnleashedRecompLib/Private/default.xexp" 
-            "UnleashedRecompLib/Private/shader.ar"
+            "UnleashedRecompLib/private/default.xex" 
+            "UnleashedRecompLib/private/default.xexp" 
+            "UnleashedRecompLib/private/shader.ar"
           )
           for file in "${REQUIRED_FILES[@]}"; do
             if [ ! -f "$file" ]; then
