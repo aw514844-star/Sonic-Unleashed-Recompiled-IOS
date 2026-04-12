@@ -1,4 +1,4 @@
-name: Nerun Metal - RECOVERY 93
+name: Nerun Metal - ABSOLUTE FINAL 95
 on: [workflow_dispatch]
 
 env:
@@ -13,22 +13,33 @@ jobs:
         with:
           submodules: recursive
 
-      - name: 2. Install Deps
-        run: brew install cmake ninja freetype sdl2 libpng zlib
+      - name: 2. Force System Setup
+        run: |
+          # Fresh install and manual link to fix the 'Missing Freetype' error
+          brew update
+          brew install cmake ninja freetype sdl2 libpng zlib
+          brew link --overwrite freetype
 
-      - name: 3. Force Project Generation
+      - name: 3. Nuclear Project Generation
         shell: bash
         run: |
           mkdir -p build_ios
+          # Explicitly pointing to Homebrew's install location for Freetype
           cmake -S . -B build_ios -G Xcode \
-            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DENABLE_METAL=ON -DCMAKE_C_COMPILER_WORKS=1 -DCMAKE_CXX_COMPILER_WORKS=1 \
-            -DHAVE_ABS=1 -DHAVE_QSORT=1 -DHAVE_BSEARCH=1 -DHAVE_UNSETENV=1
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DENABLE_METAL=ON \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix freetype);$(brew --prefix sdl2)" \
+            -DFREETYPE_INCLUDE_DIRS="$(brew --prefix freetype)/include/freetype2" \
+            -DFREETYPE_LIBRARY="$(brew --prefix freetype)/lib/libfreetype.dylib" \
+            -DCMAKE_C_COMPILER_WORKS=1 \
+            -DCMAKE_CXX_COMPILER_WORKS=1
 
-      - name: 4. The "No-Quiet" Build
+      - name: 4. The 100% Binary Build
         shell: bash
         run: |
-          # We removed -quiet so you can see the real errors in the log
+          # Using -alltargets to ensure we capture the Metal binary
           xcodebuild build \
             -project build_ios/*.xcodeproj \
             -alltargets \
@@ -37,34 +48,28 @@ jobs:
             -derivedDataPath ./final_output \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            -quiet
           
-          # Only exit 0 for your specific blocked codes
+          # Only proceed to success if the specific blocked codes are hit
           if [[ " 1 65 66 70 128 " =~ " $? " ]]; then exit 0; fi
 
-      - name: 5. Failsafe Binary Packaging
+      - name: 5. Binary Guard & Packaging
         run: |
           mkdir -p package/Payload
+          # Targeted search in the output folder
+          APP_PATH=$(find ./final_output -name "*.app" -type d | head -n 1)
           
-          # High-accuracy search for the .app
-          REAL_APP=$(find ./final_output -name "*.app" -type d | head -n 1)
-          
-          if [ -z "$REAL_APP" ] || [ ! -d "$REAL_APP" ]; then
-            echo "CRITICAL: No .app found in output. Checking entire runner..."
-            REAL_APP=$(find . -name "*.app" -type d | grep -v "Payload" | head -n 1)
-          fi
-
-          if [ -z "$REAL_APP" ]; then
-            echo "STILL NO BINARY. The build failed. Stopping to prevent empty IPA."
-            exit 1 # This will force a Red X so you don't waste time downloading 1kb
+          if [ -z "$APP_PATH" ]; then
+            echo "CRITICAL: No binary found. Stopping to prevent 1kb IPA."
+            exit 1
           fi
           
-          echo "Found real app at $REAL_APP. Packaging now..."
-          cp -r "$REAL_APP" package/Payload/
-          cd package && zip -r ../Final_Try_93_Result.ipa Payload
+          cp -r "$APP_PATH" package/Payload/
+          cd package && zip -r ../Final_Unleashed_Metal_iPad.ipa Payload
 
       - name: 6. Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Final-Try-93
-          path: Final_Try_93_Result.ipa
+          name: Nerun-iPad-Metal-Final
+          path: Final_Unleashed_Metal_iPad.ipa
