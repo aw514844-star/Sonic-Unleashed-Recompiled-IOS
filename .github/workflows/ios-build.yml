@@ -1,4 +1,4 @@
-name: Sonic Unleashed iPad 9 - Hard Copy Fix
+name: Sonic Unleashed - Direct Path Fix
 on: [workflow_dispatch]
 
 jobs:
@@ -8,39 +8,29 @@ jobs:
       - name: Checkout with Submodules
         uses: actions/checkout@v4
         with:
-          submodules: recursive # Critical for recompilation logic
+          submodules: recursive # Ensures internal recompiler tools are present
 
-      - name: Setup & Build
+      - name: Build with CMake
         run: |
           mkdir build && cd build
-          # Generate Xcode project with A13 (arm64) target
           cmake .. -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
-          
-          # Build the main game target
           cmake --build . --config Release --target UnleashedRecomp
 
-      - name: Inject Game Files (Manual Force)
-        run: |
-          # Locate the .app folder
-          APP_PATH=$(find build -name "UnleashedRecomp.app" -type d | head -n 1)
-          
-          # Manually copy your private files into the .app/
-          # This ensures the IPA is NOT empty
-          echo "Injecting files into $APP_PATH"
-          cp UnleashedRecompLib/private/default.xex "$APP_PATH/"
-          cp UnleashedRecompLib/private/default.xexp "$APP_PATH/"
-          cp UnleashedRecompLib/private/shader.ar "$APP_PATH/"
-          
-      - name: Package IPA
+      - name: Locate and Package IPA
         run: |
           mkdir -p Payload
-          APP_PATH=$(find build -name "UnleashedRecomp.app" -type d | head -n 1)
+          # This search covers the entire build directory to find the app
+          APP_PATH=$(find . -name "*.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: Build failed to produce a binary. Check your file placement."
+            exit 1
+          fi
           cp -R "$APP_PATH" Payload/
-          zip -r SonicUnleashed_iPad9.ipa Payload
+          zip -r Unleashed_iPad9.ipa Payload
           
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: SonicUnleashed_iPad9_Final
-          path: SonicUnleashed_iPad9.ipa
+          name: Unleashed_iPad9_Final
+          path: Unleashed_iPad9.ipa
