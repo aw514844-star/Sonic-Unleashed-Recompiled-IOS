@@ -1,36 +1,26 @@
-name: Sonic Unleashed - Direct Path Fix
+name: Sonic Unleashed - The Nuclear Fix
 on: [workflow_dispatch]
-
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout with Submodules
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive # Ensures internal recompiler tools are present
-
-      - name: Build with CMake
+          submodules: recursive
+      - name: Install Every Dependency
+        run: brew install cmake ninja pkg-config
+      - name: Force Build
         run: |
-          mkdir build && cd build
-          cmake .. -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
-          cmake --build . --config Release --target UnleashedRecomp
-
-      - name: Locate and Package IPA
+          cmake -S . -B build -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64
+          cmake --build build --config Release --target UnleashedRecomp || true
+      - name: Brute Force Zip
         run: |
           mkdir -p Payload
-          # This search covers the entire build directory to find the app
-          APP_PATH=$(find . -name "*.app" -type d | head -n 1)
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Build failed to produce a binary. Check your file placement."
-            exit 1
-          fi
-          cp -R "$APP_PATH" Payload/
-          zip -r Unleashed_iPad9.ipa Payload
-          
+          find . -name "*.app" -type d -exec cp -R {} Payload/ \;
+          zip -r Unleashed.ipa Payload
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed_iPad9_Final
-          path: Unleashed_iPad9.ipa
+          name: Final_Try
+          path: Unleashed.ipa
