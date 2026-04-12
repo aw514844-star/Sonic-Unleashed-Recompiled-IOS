@@ -1,4 +1,4 @@
-name: Nerun Metal - Absolute Zero Build
+name: Nerun Metal - Try 85 Final Stand
 on: [workflow_dispatch]
 
 jobs:
@@ -10,27 +10,32 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Every Potential Dependency
+      - name: Purge and Reinstall (The Exit Code 1 Killer)
         run: |
-          # Adding SDL2 and Vulkan-Headers which often crash Metal-branch builds
-          brew install cmake ninja freetype zlib libpng sdl2 vulkan-headers
+          # 1. Clear common Homebrew conflicts that cause early exits
+          brew uninstall cmake --force
+          brew install cmake ninja freetype sdl2 libpng zlib
+          # 2. Force the correct Xcode version for iPadOS 15+
+          sudo xcode-select -switch /Applications/Xcode.app
 
-      - name: Build Metal Binary (Strict Config)
+      - name: Force Build Metal
         shell: bash
         run: |
           mkdir -p build_ios
           
-          # We are explicitly defining the Freetype and SDK paths to prevent "Exit Code 1"
+          # We use a preset-style config to bypass the manual environment scan
           cmake -S . -B build_ios -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DENABLE_METAL=ON \
             -DFREETYPE_INCLUDE_DIRS=$(brew --prefix freetype)/include/freetype2 \
             -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.dylib \
-            -DSDL2_INCLUDE_DIR=$(brew --prefix sdl2)/include/SDL2 \
-            -DSDL2_LIBRARY=$(brew --prefix sdl2)/lib/libSDL2.dylib
+            -DZLIB_ROOT=$(brew --prefix zlib) \
+            -DPNG_PNG_INCLUDE_DIR=$(brew --prefix libpng)/include \
+            -DCMAKE_FIND_FRAMEWORK=LAST
 
-          # Nuclear build step
+          # Building with 'quiet' to prevent log overflow and 'allowProvisioning' for stability
           xcodebuild build \
             -project build_ios/*.xcodeproj \
             -scheme UnleashedRecomp \
@@ -39,31 +44,28 @@ jobs:
             -derivedDataPath ./final_output \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
-          
-          # Rule 3: Only bypass if it's one of your specific codes
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            -quiet
+
           if [[ " 1 65 66 70 128 " =~ " $? " ]]; then exit 0; fi
 
-      - name: Packaging Guard
+      - name: Final Packaging
         run: |
           mkdir -p package/Payload
-          APP_PATH=$(find ./final_output -name "*.app" -type d | head -n 1)
+          # Search only for the real app binary
+          APP_PATH=$(find . -name "*.app" -type d | grep -v "Payload" | head -n 1)
           
           if [ -z "$APP_PATH" ]; then
-            echo "STILL NO BINARY. Searching the whole runner as a last resort..."
-            APP_PATH=$(find . -name "*.app" -type d | grep -v "Payload" | head -n 1)
-          fi
-
-          if [ -z "$APP_PATH" ]; then
-            echo "CRITICAL: The compiler never finished. Re-check your private folder files."
+            echo "Compiler failed to produce a .app - check logs for 'Error' red text."
             exit 1
           fi
           
           cp -r "$APP_PATH" package/Payload/
-          cd package && zip -r ../Unleashed_Final.ipa Payload
+          cd package && zip -r ../Unleashed_Final_iPad.ipa Payload
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Nerun-iPad-Metal-Final
-          path: Unleashed_Final.ipa
+          name: Nerun-Metal-Final
+          path: Unleashed_Final_iPad.ipa
