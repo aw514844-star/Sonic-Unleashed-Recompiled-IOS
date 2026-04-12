@@ -1,26 +1,54 @@
-name: Sonic Unleashed - The Nuclear Fix
+name: Sonic Unleashed iPad 9 - Perfect Build
 on: [workflow_dispatch]
+
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout
+      - name: Checkout Recursive (Crucial for Code)
         uses: actions/checkout@v4
         with:
-          submodules: recursive
-      - name: Install Every Dependency
+          submodules: recursive # Downloads the "brain" of the recompiler
+
+      - name: Force Install Dependencies
         run: brew install cmake ninja pkg-config
-      - name: Force Build
+
+      - name: Generate & Build (Bypass Signing)
         run: |
-          cmake -S . -B build -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64
-          cmake --build build --config Release --target UnleashedRecomp || true
-      - name: Brute Force Zip
+          mkdir build && cd build
+          # Configure for A13 (iPad 9) architecture and block signing errors
+          cmake .. -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=""
+
+          # Execute the build and force continue even with warnings
+          cmake --build . --config Release --target UnleashedRecomp || true
+
+      - name: Manual "Alive" Packaging (No Empty IPA)
         run: |
           mkdir -p Payload
-          find . -name "*.app" -type d -exec cp -R {} Payload/ \;
-          zip -r Unleashed.ipa Payload
-      - name: Upload
+          # Search everywhere for the .app file
+          APP_PATH=$(find . -name "*.app" -type d | head -n 1)
+          
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: Build failed to produce a binary. Check UnleashedRecompLib/private/ files."
+            exit 1
+          fi
+          
+          # Inject game files manually into the app container
+          echo "Injecting game files into $APP_PATH..."
+          cp UnleashedRecompLib/private/default.xex "$APP_PATH/" || true
+          cp UnleashedRecompLib/private/shader.ar "$APP_PATH/" || true
+          
+          # Copy to Payload and zip
+          cp -R "$APP_PATH" Payload/
+          zip -r SonicUnleashed_iPad9.ipa Payload
+          
+      - name: Upload Finished Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Final_Try
-          path: Unleashed.ipa
+          name: SonicUnleashed_iPad9_Final
+          path: SonicUnleashed_iPad9.ipa
