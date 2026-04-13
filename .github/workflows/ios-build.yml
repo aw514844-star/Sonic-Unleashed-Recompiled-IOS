@@ -1,7 +1,5 @@
 name: Sonic Unleashed Final
-on:
-  workflow_dispatch:
-  push:
+on: [workflow_dispatch, push]
 
 jobs:
   build:
@@ -12,80 +10,36 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build Engine
+      - name: Build
         run: |
           set +e
-          # We force the build to a local folder named 'Build'
-          xcodebuild build \
-            -scheme "UnleashedRecomp" \
-            -sdk iphoneos \
-            -configuration Release \
-            -derivedDataPath ./Build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES || true
+          xcodebuild build -scheme "UnleashedRecomp" -sdk iphoneos -configuration Release -derivedDataPath ./Output CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE_SPECIFIER="" AD_HOC_CODE_SIGNING_ALLOWED=YES || true
           exit 0
 
       - name: Inject
         run: |
-          mkdir -p FinalPayload/Payload
-          
-          # 1. Find the .app inside our local Build folder
-          APP_DIR=$(find ./Build -name "*.app" -type d | head -n 1)
-          
-          if [ -n "$APP_DIR" ]; then
-            cp -R "$APP_DIR/" FinalPayload/Payload/Unleashed.app/
-          else
-            # Emergency: If the build failed, we make a shell so it doesn't crash
-            mkdir -p FinalPayload/Payload/Unleashed.app
+          mkdir -p Payload/Unleashed.app
+          # 1. FORCE FIND: This finds the app anywhere in the folder
+          APP_PATH=$(find . -name "*.app" -type d | head -n 1)
+          if [ -n "$APP_PATH" ]; then
+            cp -R "$APP_PATH/" Payload/Unleashed.app/
           fi
 
-          # 2. Fix Identity Card
-          cat <<EOF > FinalPayload/Payload/Unleashed.app/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key>
-              <string>UnleashedRecomp</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.sythjr.unleashed</string>
-              <key>CFBundleName</key>
-              <string>Unleashed</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>MinimumOSVersion</key>
-              <string>15.0</string>
-          </dict>
-          </plist>
+          # 2. Identity Card
+          cat <<EOF > Payload/Unleashed.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>UnleashedRecomp</string><key>CFBundleIdentifier</key><string>com.sythjr.unleashed</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>MinimumOSVersion</key><string>15.0</string></dict></plist>
           EOF
 
-          # 3. Binary Renaming (Fixes Black Icon)
-          cd FinalPayload/Payload/Unleashed.app/
+          # 3. Rename Binary (The "Missing Executable" fix)
+          cd Payload/Unleashed.app/
           BINARY=$(find . -maxdepth 1 -type f -size +1M | head -n 1)
-          if [ -n "$BINARY" ]; then
-            mv "$BINARY" UnleashedRecomp
-          fi
+          if [ -n "$BINARY" ]; then mv "$BINARY" UnleashedRecomp; fi
           chmod +x UnleashedRecomp
-          cd ../../../
+          cd ../..
 
-          # 4. Force Inject Assets
-          cp UnleashedRecompLib/Private/default.xex FinalPayload/Payload/Unleashed.app/ || true
-          cp UnleashedRecompLib/Private/default.xexp FinalPayload/Payload/Unleashed.app/ || true
-          cp UnleashedRecompLib/Private/shader.ar FinalPayload/Payload/Unleashed.app/ || true
-          
-          cd FinalPayload
-          zip -r ../Unleashed_Standard.ipa Payload
-          cd ..
-          
-          SIZE=$(stat -f%z "Unleashed_Standard.ipa")
-          echo "IPA SIZE: $SIZE bytes"
+          # 4. Final Data Move
+          cp UnleashedRecompLib/Private/* Payload/Unleashed.app/ || true
+          zip -r Unleashed_Standard.ipa Payload
 
       - name: Upload
         uses: actions/upload-artifact@v4
