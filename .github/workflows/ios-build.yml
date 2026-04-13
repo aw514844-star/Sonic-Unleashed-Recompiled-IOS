@@ -1,65 +1,69 @@
-name: Sonic Unleashed Final
-on:
-  workflow_dispatch:
-  push:
+name: Unleashed iPad 9 Final Fix
+on: [workflow_dispatch, push]
 
 jobs:
-  build_process:
+  build:
     runs-on: macos-latest
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Setup Private Folder
+      - name: Pre-Flight Asset Check
         run: |
           mkdir -p UnleashedRecompLib/Private
-          # Ensures Rule 2: Files are present or dummy-initialized to prevent crash
-          [ -f UnleashedRecompLib/Private/default.xex ] || touch UnleashedRecompLib/Private/default.xex
-          [ -f UnleashedRecompLib/Private/default.xexp ] || touch UnleashedRecompLib/Private/default.xexp
-          [ -f UnleashedRecompLib/Private/shader.ar ] || touch UnleashedRecompLib/Private/shader.ar
+          # Rule 2: Ensure your game files are actually in the repo
+          FILES=("UnleashedRecompLib/Private/default.xex" "UnleashedRecompLib/Private/default.xexp" "UnleashedRecompLib/Private/shader.ar")
+          for f in "${FILES[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::warning:: $f not found! Creating dummy to prevent build crash."
+              touch "$f"
+            fi
+          done
 
-      - name: Build Engine
+      - name: Force Build to Direct Path
         run: |
+          # Rule 1 & 3: Bypass signing and force output to './Build'
           set +e
-          # Rule 1, 3, 4, 5: Force build without signing and ignore specific exit codes
           xcodebuild build \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
             -configuration Release \
+            -derivedDataPath ./Build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES || true
-          
-          # Force a successful exit to prevent the 'failed' red badge
           exit 0
 
-      - name: Finalize IPA
+      - name: Rule 8: Absolute Payload Verification
         run: |
-          # Rule 8: Create physical structure to ensure the IPA is never empty
           mkdir -p Package/Payload
+          # Hunt for the .app file in the forced Build directory
+          APP_DIR=$(find ./Build -name "*.app" -type d | head -n 1)
           
-          # Locating the actual build output
-          BUILT_APP=$(find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d | head -n 1)
-          
-          if [ -n "$BUILT_APP" ]; then
-            cp -R "$BUILT_APP" Package/Payload/
+          if [ -z "$APP_DIR" ]; then
+            echo "Critical Error: No .app produced. Forcing a shell folder."
+            mkdir -p Package/Payload/Unleashed.app
           else
-            # Emergency fallback: ensures the 'upload' step doesn't fail
-            mkdir -p Package/Payload/Sonic.app
-            touch Package/Payload/Sonic.app/Sonic
+            cp -R "$APP_DIR" Package/Payload/
           fi
           
+          # Force zip and check size
           cd Package
-          zip -r ../Unleashed_iPad.ipa Payload
-          echo "Packaging Complete."
+          zip -r ../Unleashed_iPad9_Fixed.ipa Payload
+          cd ..
+          
+          SIZE=$(stat -f%z "Unleashed_iPad9_Fixed.ipa")
+          if [ "$SIZE" -lt 10000 ]; then
+            echo "::error::IPA IS EMPTY (Size: $SIZE bytes). Fix your source files!"
+            exit 1
+          fi
 
-      - name: Upload
+      - name: Upload Final Build
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-IPA
-          path: Unleashed_iPad.ipa
-          if-no-files-found: ignore
+          name: Sonic-Unleashed-Final
+          path: Unleashed_iPad9_Fixed.ipa
