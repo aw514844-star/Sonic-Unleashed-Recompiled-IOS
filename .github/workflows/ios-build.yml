@@ -1,4 +1,4 @@
-name: Sonic Unleashed Ultimate Fix
+name: Sonic Unleashed Final
 on:
   workflow_dispatch:
   push:
@@ -12,17 +12,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Force Asset Directory
-        run: |
-          mkdir -p UnleashedRecompLib/Private
-          # Rule 2: Detecting your specific files in the repo
-          ls -R UnleashedRecompLib/Private
-
-      - name: Build and Export App
+      - name: Build Engine (Force Archive)
         run: |
           set +e
-          # Rule 1 & 3: Bypass all signing and ignore requested exit codes
-          # -archivePath stops the "hidden folder" 1KB bug
+          # Rule 1 & 3: Strip signing and ignore requested exit codes
+          # We use -archivePath to prevent the Mac from hiding the files
           xcodebuild archive \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
@@ -35,25 +29,31 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=YES || true
           exit 0
 
-      - name: Rule 8: The Absolute Zip Fix
+      - name: Rule 8: Manual Assembly (Fixes 1KB IPA)
         run: |
           mkdir -p Payload
-          # The real .app is inside the archive. We copy it directly.
-          cp -R ./Unleashed.xcarchive/Products/Applications/*.app Payload/ || mkdir -p Payload/Unleashed.app
+          # We pull the app directly from the Products folder inside the archive
+          # This is the ONLY way to ensure the IPA isn't empty
+          if [ -d "./Unleashed.xcarchive/Products/Applications" ]; then
+            cp -R ./Unleashed.xcarchive/Products/Applications/*.app Payload/
+          else
+            # Emergency search if the archive moved
+            APP_PATH=$(find . -name "*.app" -type d | head -n 1)
+            cp -R "$APP_PATH" Payload/
+          fi
           
-          # Force zip with high compression
-          zip -r9 Unleashed_Standard.ipa Payload
+          zip -r Unleashed_Standard.ipa Payload
           
-          # Verification: If it's still tiny, the script kills the build so you know
+          # Verification: If the file is still tiny, the build will fail red
           SIZE=$(stat -f%z "Unleashed_Standard.ipa")
-          echo "IPA_SIZE=$SIZE"
-          if [ "$SIZE" -lt 5000 ]; then
-            echo "::error::IPA is empty. The Mac did not find the .app folder."
+          echo "Final IPA Size: $SIZE bytes"
+          if [ "$SIZE" -lt 10000 ]; then
+            echo "::error::IPA IS EMPTY. Build process failed to locate binary."
             exit 1
           fi
 
-      - name: Upload
+      - name: Upload Finished Build
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Final-Build
+          name: Unleashed-Standard-Build
           path: Unleashed_Standard.ipa
