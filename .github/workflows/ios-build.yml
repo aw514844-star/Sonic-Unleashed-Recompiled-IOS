@@ -1,47 +1,15 @@
-name: Sonic Unleashed Final
-on:
-  workflow_dispatch:
-  push:
-
-jobs:
-  build:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Build Engine
-        run: |
-          set +e
-          xcodebuild archive \
-            -scheme "UnleashedRecomp" \
-            -sdk iphoneos \
-            -configuration Release \
-            -archivePath ./Standard.xcarchive \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES || true
-          exit 0
-
-      - name: Inject Identity (Fixes No Info.plist)
+      - name: Inject
         run: |
           mkdir -p Payload/Unleashed.app
-          
-          # 1. Grab the binary
           APP_PATH=$(find ./Standard.xcarchive -name "*.app" -type d | head -n 1)
           if [ -n "$APP_PATH" ]; then
             cp -R "$APP_PATH/" Payload/Unleashed.app/
           fi
 
-          # 2. CREATE THE MISSING IDENTITY CARD
-          # This tells iLoader the app is real
+          # 1. FIXED IDENTITY CARD (Matches Executable)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
           <plist version="1.0">
           <dict>
               <key>CFBundleExecutable</key>
@@ -58,23 +26,24 @@ jobs:
               <string>1</string>
               <key>MinimumOSVersion</key>
               <string>15.0</string>
-              <key>UILaunchStoryboardName</key>
-              <string>LaunchScreen</string>
           </dict>
           </plist>
           EOF
 
-          # 3. Inject your Xbox 360 files
+          # 2. THE FIX: Find the actual binary and rename it to UnleashedRecomp
+          # This stops the 'Missing Bundle Executable' error
+          cd Payload/Unleashed.app/
+          REAL_BINARY=$(find . -maxdepth 1 -type f -not -name ".*" -not -name "Info.plist" -perm +111 | head -n 1)
+          if [ -n "$REAL_BINARY" ]; then
+            mv "$REAL_BINARY" UnleashedRecomp
+          fi
+          cd ../..
+
+          # 3. Inject Assets
           cp UnleashedRecompLib/Private/default.xex Payload/Unleashed.app/ || true
           cp UnleashedRecompLib/Private/default.xexp Payload/Unleashed.app/ || true
           cp UnleashedRecompLib/Private/shader.ar Payload/Unleashed.app/ || true
           
           zip -r Unleashed_Standard.ipa Payload
           SIZE=$(stat -f%z "Unleashed_Standard.ipa")
-          echo "IPA READY: $SIZE bytes"
-
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: Unleashed-Standard-IPA
-          path: Unleashed_Standard.ipa
+          echo "IPA SIZE IS $SIZE BYTES"
