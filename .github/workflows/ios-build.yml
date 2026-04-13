@@ -15,13 +15,14 @@ jobs:
       - name: Build
         run: |
           set +e
-          xcodebuild archive \
+          # We use -derivedDataPath to force the files into a local folder
+          xcodebuild build \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
             -configuration Release \
-            -archivePath ./Standard.xcarchive \
+            -derivedDataPath ./Output \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_REQUIRED=NO \
+            CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES || true
@@ -31,13 +32,13 @@ jobs:
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # Find the app and move it to Payload
-          APP_PATH=$(find ./Standard.xcarchive -name "*.app" -type d | head -n 1)
-          if [ -n "$APP_PATH" ]; then
-            cp -R "$APP_PATH/" Payload/Unleashed.app/
+          # 1. Find the .app wherever it hid in the Output folder
+          APP_DIR=$(find ./Output -name "*.app" -type d | head -n 1)
+          if [ -n "$APP_DIR" ]; then
+            cp -R "$APP_DIR/" Payload/Unleashed.app/
           fi
 
-          # 1. Create the Info.plist (Identity Card)
+          # 2. Fix the Identity Card (Info.plist)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -61,21 +62,24 @@ jobs:
           </plist>
           EOF
 
-          # 2. Fix the "Missing Executable" error
-          # This finds the main file and renames it to UnleashedRecomp
+          # 3. Rename the Binary (Fixes the "Missing Executable" error)
+          # This hunts for the largest file in the app folder and renames it
           cd Payload/Unleashed.app/
-          mv Unleashed UnleashedRecomp || mv UnleashedRecomp_iOS UnleashedRecomp || echo "Binary already named correctly"
+          BINARY=$(find . -maxdepth 1 -type f -size +1M | head -n 1)
+          if [ -n "$BINARY" ]; then
+            mv "$BINARY" UnleashedRecomp
+          fi
           chmod +x UnleashedRecomp
           cd ../..
 
-          # 3. Add game files
+          # 4. Inject Game Files
           cp UnleashedRecompLib/Private/default.xex Payload/Unleashed.app/ || true
           cp UnleashedRecompLib/Private/default.xexp Payload/Unleashed.app/ || true
           cp UnleashedRecompLib/Private/shader.ar Payload/Unleashed.app/ || true
           
           zip -r Unleashed_Standard.ipa Payload
           SIZE=$(stat -f%z "Unleashed_Standard.ipa")
-          echo "IPA SIZE IS $SIZE BYTES"
+          echo "IPA SIZE: $SIZE bytes"
 
       - name: Upload
         uses: actions/upload-artifact@v4
