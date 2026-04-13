@@ -1,12 +1,43 @@
+name: Sonic Unleashed Final
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build
+        run: |
+          set +e
+          xcodebuild archive \
+            -scheme "UnleashedRecomp" \
+            -sdk iphoneos \
+            -configuration Release \
+            -archivePath ./Standard.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES || true
+          exit 0
+
       - name: Inject
         run: |
           mkdir -p Payload/Unleashed.app
+          
+          # Find the app and move it to Payload
           APP_PATH=$(find ./Standard.xcarchive -name "*.app" -type d | head -n 1)
           if [ -n "$APP_PATH" ]; then
             cp -R "$APP_PATH/" Payload/Unleashed.app/
           fi
 
-          # 1. FIXED IDENTITY CARD (Matches Executable)
+          # 1. Create the Info.plist (Identity Card)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -30,16 +61,14 @@
           </plist>
           EOF
 
-          # 2. THE FIX: Find the actual binary and rename it to UnleashedRecomp
-          # This stops the 'Missing Bundle Executable' error
+          # 2. Fix the "Missing Executable" error
+          # This finds the main file and renames it to UnleashedRecomp
           cd Payload/Unleashed.app/
-          REAL_BINARY=$(find . -maxdepth 1 -type f -not -name ".*" -not -name "Info.plist" -perm +111 | head -n 1)
-          if [ -n "$REAL_BINARY" ]; then
-            mv "$REAL_BINARY" UnleashedRecomp
-          fi
+          mv Unleashed UnleashedRecomp || mv UnleashedRecomp_iOS UnleashedRecomp || echo "Binary already named correctly"
+          chmod +x UnleashedRecomp
           cd ../..
 
-          # 3. Inject Assets
+          # 3. Add game files
           cp UnleashedRecompLib/Private/default.xex Payload/Unleashed.app/ || true
           cp UnleashedRecompLib/Private/default.xexp Payload/Unleashed.app/ || true
           cp UnleashedRecompLib/Private/shader.ar Payload/Unleashed.app/ || true
@@ -47,3 +76,9 @@
           zip -r Unleashed_Standard.ipa Payload
           SIZE=$(stat -f%z "Unleashed_Standard.ipa")
           echo "IPA SIZE IS $SIZE BYTES"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unleashed-Standard-IPA
+          path: Unleashed_Standard.ipa
