@@ -1,4 +1,4 @@
-name: Sonic Unleashed Final
+name: Sonic Unleashed Final - Hardened
 on: [workflow_dispatch, push]
 
 jobs:
@@ -12,43 +12,72 @@ jobs:
 
       - name: Build
         run: |
-          set +e
-          # ADDED -derivedDataPath to ensure the binary is found reliably
-          xcodebuild build -scheme "UnleashedRecomp" -sdk iphoneos -configuration Release -derivedDataPath ./DerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE_SPECIFIER="" AD_HOC_CODE_SIGNING_ALLOWED=YES || true
-          exit 0
+          # REMOVED set +e so it actually fails if the code is broken
+          xcodebuild build -scheme "UnleashedRecomp" \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath ./DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      - name: Emergency Inject
+      - name: Emergency Inject & Fix
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # FIX: Specifically look for the Mach-O binary file using the 'file' command
-          # This filters out the 0x69636e73 (icns) file that caused your error
+          # 1. FIXED: Find the real Mach-O binary (Prevents 0x69636e73 error)
           RAW_BINARY=$(find ./DerivedData -name "UnleashedRecomp" -type f | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           
           if [ -z "$RAW_BINARY" ]; then 
-            RAW_BINARY=$(find . -name "UnleashedRecomp" -type f ! -path "*/.*" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
-          fi
-          
-          # Force rename and permissions
-          if [ -n "$RAW_BINARY" ]; then
-            echo "Found binary at: $RAW_BINARY"
-            cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
-            chmod +x Payload/Unleashed.app/UnleashedRecomp
-          else
-            echo "ERROR: Executable binary not found!"
+            echo "ERROR: Compiler did not produce a binary! Check Build logs."
             exit 1
           fi
+          
+          cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
+          chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # Standard Identity Card
-          echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>UnleashedRecomp</string><key>CFBundleIdentifier</key><string>com.unleashed.recomp</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>LSRequiresIPhoneOS</key><true/><key>MinimumOSVersion</key><string>15.0</string></dict></plist>' > Payload/Unleashed.app/Info.plist
+          # 2. FIXED: Collect all .dylib files (Prevents "Library not loaded" crash)
+          find ./DerivedData -name "*.dylib" -exec cp {} Payload/Unleashed.app/ \; || true
+          if [ -d "UnleashedRecompLib/Private" ]; then
+            cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/
+          fi
 
-          # Move private files and zip
-          cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/ || true
-          zip -r Unleashed_Standard.ipa Payload
-          echo "IPA SIZE: $(stat -f%z Unleashed_Standard.ipa) bytes"
+          # 3. FIXED: Robust Info.plist (Prevents "Invalid IPA" error)
+          cat <<EOF > Payload/Unleashed.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>UnleashedRecomp</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.unleashed.recomp</string>
+              <key>CFBundleName</key>
+              <string>Unleashed</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>MinimumOSVersion</key>
+              <string>15.0</string>
+              <key>UIDeviceFamily</key>
+              <array><integer>1</integer><integer>2</integer></array>
+          </dict>
+          </plist>
+          EOF
+
+          # 4. Packaging
+          zip -r Unleashed_Final.ipa Payload
+          echo "FINAL IPA SIZE: $(stat -f%z Unleashed_Final.ipa) bytes"
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Standard-IPA
-          path: Unleashed_Standard.ipa
+          name: Unleashed-Final-IPA
+          path: Unleashed_Final.ipa
