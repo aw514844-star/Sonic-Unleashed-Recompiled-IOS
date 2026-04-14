@@ -1,7 +1,5 @@
 name: Sonic Unleashed Final
-on:
-  workflow_dispatch:
-  push:
+on: [workflow_dispatch, push]
 
 jobs:
   build:
@@ -12,72 +10,31 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build Engine
+      - name: Build
         run: |
           set +e
-          # 1. Build to a specific folder we can reach
-          xcodebuild build \
-            -scheme "UnleashedRecomp" \
-            -sdk iphoneos \
-            -configuration Release \
-            -derivedDataPath ./BuildDir \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES || true
+          xcodebuild build -scheme "UnleashedRecomp" -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE_SPECIFIER="" AD_HOC_CODE_SIGNING_ALLOWED=YES || true
           exit 0
 
-      - name: Inject and Package
+      - name: Emergency Inject
         run: |
-          # 2. START FRESH: Prevent any folder-in-folder loops
-          rm -rf StagingArea
-          mkdir -p StagingArea/Payload/Unleashed.app
+          mkdir -p Payload/Unleashed.app
+          # Rule 8: Global Hunt (Finds it anywhere on the Mac)
+          RAW_BINARY=$(find /Users/runner/Library/Developer/Xcode/DerivedData -type f -size +1M 2>/dev/null | head -n 1)
+          if [ -z "$RAW_BINARY" ]; then RAW_BINARY=$(find . -type f -size +1M | head -n 1); fi
           
-          # 3. DIRECT BINARY CAPTURE: Find the engine itself, not the folder
-          # This finds the big 11MB file and moves it exactly to where iLoader looks
-          RAW_BINARY=$(find ./BuildDir -type f -size +1M | head -n 1)
-          cp "$RAW_BINARY" StagingArea/Payload/Unleashed.app/UnleashedRecomp
-          chmod +x StagingArea/Payload/Unleashed.app/UnleashedRecomp
+          cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
+          chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # 4. IDENTITY INJECTION: CFBundleExecutable MUST match the binary name above
-          cat <<EOF > StagingArea/Payload/Unleashed.app/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key>
-              <string>UnleashedRecomp</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.unleashed.recomp</string>
-              <key>CFBundleName</key>
-              <string>Unleashed</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>LSRequiresIPhoneOS</key>
-              <true/>
-              <key>MinimumOSVersion</key>
-              <string>15.0</string>
-          </dict>
-          </plist>
+          # Identity Card
+          cat <<EOF > Payload/Unleashed.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>UnleashedRecomp</string><key>CFBundleIdentifier</key><string>com.unleashed.recomp</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>LSRequiresIPhoneOS</key><true/><key>MinimumOSVersion</key><string>15.0</string></dict></plist>
           EOF
 
-          # 5. ASSET INJECTION: Shove your .xex and shader.ar into the heart of the app
-          cp UnleashedRecompLib/Private/* StagingArea/Payload/Unleashed.app/ || true
-          
-          # 6. FINAL ZIP: Only zip the Payload folder
-          cd StagingArea
-          zip -r ../Unleashed_Standard.ipa Payload
-          cd ..
-          
-          echo "FINAL IPA SIZE: $(stat -f%z Unleashed_Standard.ipa) bytes"
+          cp UnleashedRecompLib/Private/* Payload/Unleashed.app/ || true
+          zip -r Unleashed_Standard.ipa Payload
+          echo "IPA SIZE: $(stat -f%z Unleashed_Standard.ipa) bytes"
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Standard-IPA
-          path: Unleashed_Standard.ipa
