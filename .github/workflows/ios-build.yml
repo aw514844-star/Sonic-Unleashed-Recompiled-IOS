@@ -1,4 +1,4 @@
-name: Sonic Unleashed will work
+name: Sonic Unleashed Final
 on:
   workflow_dispatch:
   push:
@@ -15,7 +15,7 @@ jobs:
       - name: Build Engine
         run: |
           set +e
-          # 1. Using the only path that successfully gave you 11.5 MB before
+          # Using the exact same path that gave you 11.5MB
           xcodebuild build \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
@@ -30,16 +30,16 @@ jobs:
 
       - name: Inject and Package
         run: |
-          # 2. Create a fresh staging folder (Stops 'identical' error)
+          # 1. Create a clean staging folder (Stops 'identical' error)
           mkdir -p OutDir/Payload/Unleashed.app
           
-          # 3. Find the app in the working BuildDir
+          # 2. Find the app in the working BuildDir
           APP_PATH=$(find ./BuildDir -name "*.app" -type d | head -n 1)
           if [ -n "$APP_PATH" ]; then
             cp -R "$APP_PATH/" OutDir/Payload/Unleashed.app/
           fi
 
-          # 4. Write Identity (Fixes iLoader 'Missing Executable' error)
+          # 3. Write Identity (Fixes iLoader 'Missing Executable' error)
           cat <<EOF > OutDir/Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -63,9 +63,10 @@ jobs:
           </plist>
           EOF
 
-          # 5. Fix Binary (Renames the engine to match Info.plist)
+          # 4. Binary Seeker (The Fix)
+          # We go inside and rename the biggest file to UnleashedRecomp
           cd OutDir/Payload/Unleashed.app/
-          # Finds the big 11MB file and names it UnleashedRecomp
+          # Finds the engine binary (anything over 1MB)
           BINARY=$(find . -maxdepth 1 -type f -size +1M | head -n 1)
           if [ -n "$BINARY" ]; then
             mv "$BINARY" UnleashedRecomp
@@ -73,10 +74,10 @@ jobs:
           fi
           cd ../../../
 
-          # 6. Inject Assets
+          # 5. Inject Assets
           cp UnleashedRecompLib/Private/* OutDir/Payload/Unleashed.app/ || true
           
-          # 7. Final Zip
+          # 6. Final Zip
           cd OutDir
           zip -r ../Unleashed_Standard.ipa Payload
           cd ..
