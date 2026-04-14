@@ -10,86 +10,57 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: recursive # Critical for engine code
 
-      - name: Build Engine
+      - name: Build Engine (No Signing)
         run: |
-          set +e
-          # Build without signing into a local workspace folder
+          # Build specifically for iLoader (No codesign, No provisioning)
           xcodebuild build \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
             -configuration Release \
             -derivedDataPath ./BuildDir \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_REQUIRED=NO \
+            CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES || true
-          exit 0
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      - name: Inject and Package
+      - name: Package for iLoader
         run: |
-          # 1. Create a clean OutDir to avoid "identical" errors
-          mkdir -p OutDir/Payload/Unleashed.app
+          # 1. Create Payload structure required for IPA
+          mkdir -p Payload
           
-          # 2. Find the app anywhere in the workspace
-          APP_DIR=$(find . -name "*.app" -type d | head -n 1)
-          
-          if [ -n "$APP_DIR" ]; then
-            # Copy contents to our clean Payload
-            cp -R "$APP_DIR/" OutDir/Payload/Unleashed.app/
-          else
-            # Emergency shell if build failed
-            mkdir -p OutDir/Payload/Unleashed.app
+          # 2. Find the actual compiled app
+          APP_PATH=$(find ./BuildDir -name "*.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::Build failed! No .app bundle found."
+            exit 1
           fi
-
-          # 3. Identity Injection (Fixes Info.plist error)
-          cat <<EOF > OutDir/Payload/Unleashed.app/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key>
-              <string>UnleashedRecomp</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.unleashed.recomp</string>
-              <key>CFBundleName</key>
-              <string>Unleashed</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>MinimumOSVersion</key>
-              <string>15.0</string>
-          </dict>
-          </plist>
-          EOF
-
-          # 4. Binary Fix (Fixes "Missing Executable" / Black Icon)
-          cd OutDir/Payload/Unleashed.app/
-          # Find the largest file (the engine) and rename it to match Info.plist
-          BINARY=$(find . -maxdepth 1 -type f -size +1M | head -n 1)
-          if [ -n "$BINARY" ]; then
-            mv "$BINARY" UnleashedRecomp
+          
+          cp -R "$APP_PATH" Payload/
+          APP_NAME=$(basename "$APP_PATH")
+          
+          # 3. Inject Game Assets (shader.ar, default.xex, etc.)
+          # These must be inside the .app folder to increase size and make game run
+          if [ -d "UnleashedRecompLib/private" ]; then
+            cp -R UnleashedRecompLib/private/* "Payload/$APP_NAME/"
           fi
-          chmod +x UnleashedRecomp
-          cd ../../../
+          
+          # 4. Fix Executable Permissions (Essential for iLoader/iOS)
+          # Instead of manual renaming, we read the real name from the Info.plist
+          EXECUTABLE=$(defaults read "$(pwd)/Payload/$APP_NAME/Info.plist" CFBundleExecutable)
+          chmod +x "Payload/$APP_NAME/$EXECUTABLE"
 
-          # 5. Asset Injection (Force moves your xex and shader.ar)
-          cp UnleashedRecompLib/Private/* OutDir/Payload/Unleashed.app/ || true
+          # 5. Create the IPA
+          zip -r Unleashed_Final.ipa Payload
           
-          # 6. Create Standard IPA
-          cd OutDir
-          zip -r ../Unleashed_Standard.ipa Payload
-          cd ..
-          
-          echo "FINAL IPA SIZE: $(stat -f%z Unleashed_Standard.ipa) bytes"
+          # 6. Verify Size (Target ~11MB)
+          FILESIZE=$(stat -f%z Unleashed_Final.ipa)
+          echo "Final IPA Size: $FILESIZE bytes"
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: Unleashed-Standard-IPA
-          path: Unleashed_Standard.ipa
+          path: Unleashed_Final.ipa
