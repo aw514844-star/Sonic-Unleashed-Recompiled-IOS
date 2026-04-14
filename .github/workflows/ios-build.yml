@@ -15,12 +15,14 @@ jobs:
       - name: Build Engine
         run: |
           set +e
+          # Force build into a dedicated 'BuildProduct' folder
           xcodebuild build \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
             -configuration Release \
+            -derivedDataPath ./BuildProduct \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES || true
@@ -28,20 +30,18 @@ jobs:
 
       - name: Permanent Inject and Package
         run: |
-          mkdir -p FinalOut/Payload/Unleashed.app
+          # 1. Create a clean Payload folder in a SEPARATE directory
+          mkdir -p PackageDir/Payload/Unleashed.app
           
-          # 1. THE QUIET HUNT: 2>/dev/null stops the "No such file" crash
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "*.app" -type d 2>/dev/null | head -n 1)
-          if [ -z "$APP_PATH" ]; then
-            APP_PATH=$(find . -name "*.app" -type d 2>/dev/null | head -n 1)
-          fi
+          # 2. Hunt ONLY in the BuildProduct folder to avoid identical loops
+          APP_PATH=$(find ./BuildProduct -name "*.app" -type d | head -n 1)
           
           if [ -n "$APP_PATH" ]; then
-            cp -R "$APP_PATH/" FinalOut/Payload/Unleashed.app/
+            cp -R "$APP_PATH/" PackageDir/Payload/Unleashed.app/
           fi
 
-          # 2. Identity Injection
-          cat <<EOF > FinalOut/Payload/Unleashed.app/Info.plist
+          # 3. Identity Injection (Info.plist) - Fixes Sideload Errors
+          cat <<EOF > PackageDir/Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
           <plist version="1.0">
@@ -64,27 +64,27 @@ jobs:
           </plist>
           EOF
 
-          # 3. Binary Renaming (Matches Info.plist)
-          cd FinalOut/Payload/Unleashed.app/
-          BINARY=$(find . -maxdepth 1 -type f -size +1M 2>/dev/null | head -n 1)
+          # 4. Binary Renaming (Fixes Black Icon / Crash)
+          cd PackageDir/Payload/Unleashed.app/
+          BINARY=$(find . -maxdepth 1 -type f -size +1M | head -n 1)
           if [ -n "$BINARY" ]; then
             mv "$BINARY" UnleashedRecomp
-            chmod +x UnleashedRecomp
           fi
+          chmod +x UnleashedRecomp
           cd ../../../
 
-          # 4. Final Data Injection
-          cp UnleashedRecompLib/Private/* FinalOut/Payload/Unleashed.app/ || true
+          # 5. Manual Asset Injection (Forces your .xex and .ar in)
+          cp UnleashedRecompLib/Private/* PackageDir/Payload/Unleashed.app/ || true
           
-          # 5. Pack Standard IPA
-          cd FinalOut
-          zip -r ../Unleashed_Standard.ipa Payload
+          # 6. Pack Standard IPA
+          cd PackageDir
+          zip -r ../Unleashed_Final.ipa Payload
           cd ..
           
-          echo "IPA READY: $(stat -f%z Unleashed_Standard.ipa) bytes"
+          echo "IPA READY: $(stat -f%z Unleashed_Final.ipa) bytes"
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: Unleashed-Standard-IPA
-          path: Unleashed_Standard.ipa
+          path: Unleashed_Final.ipa
