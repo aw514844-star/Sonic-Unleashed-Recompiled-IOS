@@ -13,19 +13,20 @@ jobs:
       - name: Build
         run: |
           set +e
-          xcodebuild build -scheme "UnleashedRecomp" -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE_SPECIFIER="" AD_HOC_CODE_SIGNING_ALLOWED=YES || true
+          # ADDED -derivedDataPath to ensure the binary is found reliably
+          xcodebuild build -scheme "UnleashedRecomp" -sdk iphoneos -configuration Release -derivedDataPath ./DerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE_SPECIFIER="" AD_HOC_CODE_SIGNING_ALLOWED=YES || true
           exit 0
 
       - name: Emergency Inject
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # FIX: Specifically look for the Mach-O binary file instead of just any file over 1MB
-          # This prevents grabbing the .icns (0x69636e73) file by mistake
-          RAW_BINARY=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "UnleashedRecomp" -type f ! -name "*.icns" ! -name "*.png" | head -n 1)
+          # FIX: Specifically look for the Mach-O binary file using the 'file' command
+          # This filters out the 0x69636e73 (icns) file that caused your error
+          RAW_BINARY=$(find ./DerivedData -name "UnleashedRecomp" -type f | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           
           if [ -z "$RAW_BINARY" ]; then 
-            RAW_BINARY=$(find . -name "UnleashedRecomp" -type f ! -path "*/.*" | head -n 1)
+            RAW_BINARY=$(find . -name "UnleashedRecomp" -type f ! -path "*/.*" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           fi
           
           # Force rename and permissions
