@@ -12,8 +12,22 @@ jobs:
 
       - name: Build
         run: |
-          # REMOVED set +e so it actually fails if the code is broken
-          xcodebuild build -scheme "UnleashedRecomp" \
+          # Automatically find the project file to fix Error 66
+          PROJECT_FILE=$(find . -name "*.xcodeproj" -o -name "*.xcworkspace" | head -n 1)
+          
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: No .xcodeproj or .xcworkspace found!"
+            exit 1
+          fi
+
+          echo "Using Project: $PROJECT_FILE"
+
+          # Determine if we should use -project or -workspace
+          TYPE_FLAG="-project"
+          if [[ "$PROJECT_FILE" == *.xcworkspace ]]; then TYPE_FLAG="-workspace"; fi
+
+          xcodebuild build $TYPE_FLAG "$PROJECT_FILE" \
+            -scheme "UnleashedRecomp" \
             -sdk iphoneos \
             -configuration Release \
             -derivedDataPath ./DerivedData \
@@ -27,24 +41,32 @@ jobs:
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # 1. FIXED: Find the real Mach-O binary (Prevents 0x69636e73 error)
+          # Find the real Mach-O binary (Fixes iLoader magic number error 0x69636e73)
           RAW_BINARY=$(find ./DerivedData -name "UnleashedRecomp" -type f | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           
           if [ -z "$RAW_BINARY" ]; then 
-            echo "ERROR: Compiler did not produce a binary! Check Build logs."
+            echo "ERROR: Binary not found! Trying fallback search..."
+            RAW_BINARY=$(find ./DerivedData -type f -perm +111 -not -name "*.dylib" -not -name "*.plist" | head -n 1)
+          fi
+          
+          if [ -z "$RAW_BINARY" ]; then
+            echo "CRITICAL ERROR: No executable found."
             exit 1
           fi
           
+          echo "Injecting binary: $RAW_BINARY"
           cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # 2. FIXED: Collect all .dylib files (Prevents "Library not loaded" crash)
+          # Collect all .dylib libraries (Fixes launch crashes)
           find ./DerivedData -name "*.dylib" -exec cp {} Payload/Unleashed.app/ \; || true
+          
+          # Inject Private Assets
           if [ -d "UnleashedRecompLib/Private" ]; then
             cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/
           fi
 
-          # 3. FIXED: Robust Info.plist (Prevents "Invalid IPA" error)
+          # Generate clean Info.plist for iLoader
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -72,9 +94,9 @@ jobs:
           </plist>
           EOF
 
-          # 4. Packaging
+          # Package for iLoader
           zip -r Unleashed_Final.ipa Payload
-          echo "FINAL IPA SIZE: $(stat -f%z Unleashed_Final.ipa) bytes"
+          echo "FINISHED: IPA ready for dev account signing."
 
       - name: Upload
         uses: actions/upload-artifact@v4
