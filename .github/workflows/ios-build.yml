@@ -1,5 +1,7 @@
 name: Sonic Unleashed Final
-on: [workflow_dispatch, push]
+on:
+  workflow_dispatch:
+  push:
 
 jobs:
   build:
@@ -10,17 +12,17 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build
+      - name: Build Engine
         run: |
           set +e
-          # Building to a local folder named 'Product' to avoid hidden paths
+          # Using the exact same BuildDir logic that gave you 11.5MB
           xcodebuild build \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
             -configuration Release \
-            -derivedDataPath ./Product \
+            -derivedDataPath ./BuildDir \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES || true
@@ -28,51 +30,60 @@ jobs:
 
       - name: Inject and Package
         run: |
-          # 1. Create a clean Staging room (Fixes 'identical' error)
-          mkdir -p Staging/Payload/Unleashed.app
+          # Keep your last working folder structure
+          mkdir -p StagingArea/Payload/Unleashed.app
           
-          # 2. Find the app and move it to Staging
-          APP_DIR=$(find ./Product -name "*.app" -type d | head -n 1)
+          # Find the app exactly like the last success
+          APP_DIR=$(find ./BuildDir -name "*.app" -type d | head -n 1)
           if [ -n "$APP_DIR" ]; then
-            cp -R "$APP_DIR/" Staging/Payload/Unleashed.app/
+            cp -R "$APP_DIR/" StagingArea/Payload/Unleashed.app/
           fi
 
-          # 3. Write Identity Card (Info.plist)
-          cat <<EOF > Staging/Payload/Unleashed.app/Info.plist
+          # ADDING THE FIX ONLY: Identity and Binary Alignment
+          cat <<EOF > StagingArea/Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0"><dict>
-          <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
-          <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
-          <key>CFBundleName</key><string>Unleashed</string>
-          <key>CFBundlePackageType</key><string>APPL</string>
-          <key>CFBundleShortVersionString</key><string>1.0</string>
-          <key>CFBundleVersion</key><string>1</string>
-          <key>MinimumOSVersion</key><string>15.0</string>
-          </dict></plist>
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>UnleashedRecomp</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.unleashed.recomp</string>
+              <key>CFBundleName</key>
+              <string>Unleashed</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>MinimumOSVersion</key>
+              <string>15.0</string>
+          </dict>
+          </plist>
           EOF
 
-          # 4. Binary Seeker (Fixes the Black Icon/No Open error)
-          cd Staging/Payload/Unleashed.app/
-          # Finds the engine and renames it to match the Info.plist
+          # Binary Alignment Fix: Renaming the big file to UnleashedRecomp
+          cd StagingArea/Payload/Unleashed.app/
           BINARY=$(find . -maxdepth 1 -type f -size +1M | head -n 1)
           if [ -n "$BINARY" ]; then
             mv "$BINARY" UnleashedRecomp
-            chmod +x UnleashedRecomp
           fi
+          chmod +x UnleashedRecomp
           cd ../../../
 
-          # 5. Asset Injection
-          cp UnleashedRecompLib/Private/* Staging/Payload/Unleashed.app/ || true
+          # Keep your same asset injection logic
+          cp UnleashedRecompLib/Private/* StagingArea/Payload/Unleashed.app/ || true
           
-          # 6. Final Zip
-          cd Staging
-          zip -r ../Unleashed_Final.ipa Payload
+          # Final Zip
+          cd StagingArea
+          zip -r ../Unleashed_Standard.ipa Payload
           cd ..
-          echo "IPA SIZE: $(stat -f%z Unleashed_Final.ipa) bytes"
+          
+          echo "FINAL IPA SIZE: $(stat -f%z Unleashed_Standard.ipa) bytes"
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: Unleashed-Standard-IPA
-          path: Unleashed_Final.ipa
+          path: Unleashed_Standard.ipa
