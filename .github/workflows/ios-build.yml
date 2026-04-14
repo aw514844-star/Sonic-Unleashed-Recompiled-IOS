@@ -1,5 +1,7 @@
 name: Sonic Unleashed Final
-on: [workflow_dispatch, push]
+on:
+  workflow_dispatch:
+  push:
 
 jobs:
   build:
@@ -13,34 +15,37 @@ jobs:
       - name: Build Engine
         run: |
           set +e
-          # Building into a dedicated 'RawBuild' folder to avoid path conflicts
+          # Build without signing into a local workspace folder
           xcodebuild build \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
             -configuration Release \
-            -derivedDataPath ./RawBuild \
+            -derivedDataPath ./BuildDir \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES || true
           exit 0
 
-      - name: Inject
+      - name: Inject and Package
         run: |
-          # 1. Create a fresh staging area
-          mkdir -p Staging/Payload
+          # 1. Create a clean OutDir to avoid "identical" errors
+          mkdir -p OutDir/Payload/Unleashed.app
           
-          # 2. Move the app into the staging area (Fixes 'identical' error)
-          APP_DIR=$(find ./RawBuild -name "*.app" -type d | head -n 1)
+          # 2. Find the app anywhere in the workspace
+          APP_DIR=$(find . -name "*.app" -type d | head -n 1)
+          
           if [ -n "$APP_DIR" ]; then
-            cp -R "$APP_DIR/" Staging/Payload/Unleashed.app/
+            # Copy contents to our clean Payload
+            cp -R "$APP_DIR/" OutDir/Payload/Unleashed.app/
           else
-            mkdir -p Staging/Payload/Unleashed.app
+            # Emergency shell if build failed
+            mkdir -p OutDir/Payload/Unleashed.app
           fi
 
-          # 3. Identity Card (Info.plist)
-          cat <<EOF > Staging/Payload/Unleashed.app/Info.plist
+          # 3. Identity Injection (Fixes Info.plist error)
+          cat <<EOF > OutDir/Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
           <plist version="1.0">
@@ -48,7 +53,7 @@ jobs:
               <key>CFBundleExecutable</key>
               <string>UnleashedRecomp</string>
               <key>CFBundleIdentifier</key>
-              <string>com.sythjr.unleashed</string>
+              <string>com.unleashed.recomp</string>
               <key>CFBundleName</key>
               <string>Unleashed</string>
               <key>CFBundlePackageType</key>
@@ -63,8 +68,9 @@ jobs:
           </plist>
           EOF
 
-          # 4. Binary Fix (Ensures the app actually opens)
-          cd Staging/Payload/Unleashed.app/
+          # 4. Binary Fix (Fixes "Missing Executable" / Black Icon)
+          cd OutDir/Payload/Unleashed.app/
+          # Find the largest file (the engine) and rename it to match Info.plist
           BINARY=$(find . -maxdepth 1 -type f -size +1M | head -n 1)
           if [ -n "$BINARY" ]; then
             mv "$BINARY" UnleashedRecomp
@@ -72,18 +78,15 @@ jobs:
           chmod +x UnleashedRecomp
           cd ../../../
 
-          # 5. Asset Injection
-          cp UnleashedRecompLib/Private/default.xex Staging/Payload/Unleashed.app/ || true
-          cp UnleashedRecompLib/Private/default.xexp Staging/Payload/Unleashed.app/ || true
-          cp UnleashedRecompLib/Private/shader.ar Staging/Payload/Unleashed.app/ || true
+          # 5. Asset Injection (Force moves your xex and shader.ar)
+          cp UnleashedRecompLib/Private/* OutDir/Payload/Unleashed.app/ || true
           
-          # 6. Final Pack
-          cd Staging
+          # 6. Create Standard IPA
+          cd OutDir
           zip -r ../Unleashed_Standard.ipa Payload
           cd ..
           
-          SIZE=$(stat -f%z "Unleashed_Standard.ipa")
-          echo "IPA SIZE: $SIZE bytes"
+          echo "FINAL IPA SIZE: $(stat -f%z Unleashed_Standard.ipa) bytes"
 
       - name: Upload
         uses: actions/upload-artifact@v4
