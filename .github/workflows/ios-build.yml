@@ -19,21 +19,30 @@ jobs:
       - name: Emergency Inject
         run: |
           mkdir -p Payload/Unleashed.app
-          # Use universal search for the 1MB+ binary
-          RAW_BINARY=$(find /Users/runner/Library/Developer/Xcode/DerivedData -type f -size +1M 2>/dev/null | head -n 1)
-          if [ -z "$RAW_BINARY" ]; then RAW_BINARY=$(find . -type f -size +1M | head -n 1); fi
+          
+          # FIX: Specifically look for the Mach-O binary file instead of just any file over 1MB
+          # This prevents grabbing the .icns (0x69636e73) file by mistake
+          RAW_BINARY=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "UnleashedRecomp" -type f ! -name "*.icns" ! -name "*.png" | head -n 1)
+          
+          if [ -z "$RAW_BINARY" ]; then 
+            RAW_BINARY=$(find . -name "UnleashedRecomp" -type f ! -path "*/.*" | head -n 1)
+          fi
           
           # Force rename and permissions
           if [ -n "$RAW_BINARY" ]; then
+            echo "Found binary at: $RAW_BINARY"
             cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
             chmod +x Payload/Unleashed.app/UnleashedRecomp
+          else
+            echo "ERROR: Executable binary not found!"
+            exit 1
           fi
 
           # Standard Identity Card
           echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>UnleashedRecomp</string><key>CFBundleIdentifier</key><string>com.unleashed.recomp</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>LSRequiresIPhoneOS</key><true/><key>MinimumOSVersion</key><string>15.0</string></dict></plist>' > Payload/Unleashed.app/Info.plist
 
           # Move private files and zip
-          cp UnleashedRecompLib/Private/* Payload/Unleashed.app/ || true
+          cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/ || true
           zip -r Unleashed_Standard.ipa Payload
           echo "IPA SIZE: $(stat -f%z Unleashed_Standard.ipa) bytes"
 
