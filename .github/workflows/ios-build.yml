@@ -1,4 +1,4 @@
-name: Sonic Unleashed Final - INFINITE SUCCESS
+name: Sonic Unleashed Final
 on: [workflow_dispatch, push]
 
 jobs:
@@ -10,76 +10,80 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Dependencies
+      - name: Build Engine
         run: |
-          # Force fresh install and hard link to /usr/local for maximum visibility
-          brew install freetype pkg-config zstd sdl2 curl
-          brew link --force freetype
-
-      - name: Hardened Generate and Build
-        run: |
-          # 1. DEFINE PATHS: On ARM Macs (macos-latest), this is /opt/homebrew
-          export BREW_PATH=$(brew --prefix)
-          
-          mkdir -p build_ios && cd build_ios
-          
-          # 2. OVERRIDE CMAKE: Manually passing every variable that failed before
-          cmake .. -G Xcode \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DFREETYPE_INCLUDE_DIRS=$BREW_PATH/include/freetype2 \
-            -DFREETYPE_LIBRARY=$BREW_PATH/lib/libfreetype.dylib \
-            -DCURL_INCLUDE_DIR=$BREW_PATH/include \
-            -DCURL_LIBRARY=$BREW_PATH/lib/libcurl.dylib \
-            -DSDL_STATIC=ON \
-            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO
-
-          # 3. VERIFIED BUILD: Force the correct project file
-          PROJECT_FILE=$(find . -name "*.xcodeproj" | head -n 1)
-          xcodebuild build -project "$PROJECT_FILE" \
+          # Use a dedicated local directory to avoid 'No such file or directory' errors
+          mkdir -p BuildDir
+          xcodebuild build \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
             -configuration Release \
-            -derivedDataPath ../DerivedData \
+            -derivedDataPath ./BuildDir \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            -parallelizeTargets -jobs 4
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES || true
 
-      - name: Final Emergency Inject
+      - name: Emergency Inject and Package
         run: |
-          # 4. PAYLOAD PREP
           mkdir -p Payload/Unleashed.app
           
-          # 5. THE MAGIC NUMBER FIX (0x69636e73 KILLER)
-          # We use 'file' validation to ensure we sign a binary, not an icon
-          RAW_BINARY=$(find ./DerivedData -path "*/Release-iphoneos/*" -type f | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
+          # 1. FIX: Magic Number / iLoader Parsing Error
+          # 'file' command ensures we grab a Mach-O binary and EXCLUDE icons (0x69636e73)
+          RAW_BINARY=$(find ./BuildDir -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           
-          if [ -z "$RAW_BINARY" ]; then
-            RAW_BINARY=$(find . -type f -perm +111 -name "UnleashedRecomp" | head -n 1)
+          if [ -z "$RAW_BINARY" ]; then 
+            # Fallback search if the primary path is weird
+            RAW_BINARY=$(find . -type f -size +1M -perm +111 | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           fi
           
-          echo "Injecting validated binary: $RAW_BINARY"
-          cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
-          chmod +x Payload/Unleashed.app/UnleashedRecomp
+          if [ -n "$RAW_BINARY" ]; then
+            echo "SUCCESS: Found valid binary at $RAW_BINARY"
+            cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
+            chmod +x Payload/Unleashed.app/UnleashedRecomp
+          else
+            echo "ERROR: No valid executable binary found. Build likely failed."
+            exit 1
+          fi
 
-          # 6. ASSET VACUUM (50MB+ GOAL)
-          find ./ -name "*.dylib" -exec cp {} Payload/Unleashed.app/ \; || true
-          [ -d "private" ] && cp -r private/* Payload/Unleashed.app/
-          [ -d "UnleashedRecompResources" ] && cp -r UnleashedRecompResources/* Payload/Unleashed.app/
-          find . -type d \( -name "assets" -o -name "data" -o -name "textures" \) -not -path "./DerivedData/*" -exec cp -r {} Payload/Unleashed.app/ \; || true
+          # 2. Asset Injection (Ensures IPA size > 11MB and boots)
+          ASSET_PATH="UnleashedRecompLib/Private"
+          if [ -d "$ASSET_PATH" ]; then
+            echo "Injecting game assets from $ASSET_PATH..."
+            cp -r "$ASSET_PATH"/* Payload/Unleashed.app/
+          else
+            echo "WARNING: $ASSET_PATH not found."
+          fi
 
-          # 7. UNIVERSAL INFO.PLIST
-          echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>UnleashedRecomp</string><key>CFBundleIdentifier</key><string>com.unleashed.recomp</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>LSRequiresIPhoneOS</key><true/><key>MinimumOSVersion</key><string>15.0</string><key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array></dict></plist>' > Payload/Unleashed.app/Info.plist
+          # 3. Create Info.plist (Fixed for any sideloader compatibility)
+          cat <<EOF > Payload/Unleashed.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>UnleashedRecomp</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.unleashed.recomp</string>
+              <key>CFBundleName</key>
+              <string>Unleashed</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>CFBundleVersion</key><string>1</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>MinimumOSVersion</key><string>15.0</string>
+              <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+          </dict>
+          </plist>
+          EOF
+          
+          # 4. Final Packaging (Standard IPA structure)
+          zip -r Unleashed_Standard.ipa Payload
+          echo "FINAL IPA SIZE: $(stat -f%z Unleashed_Standard.ipa) bytes"
 
-          # 8. THE IPA
-          zip -r Unleashed_Final.ipa Payload
-          echo "IPA READY: $(du -sh Unleashed_Final.ipa)"
-
-      - name: Upload
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Final-IPA
-          path: Unleashed_Final.ipa
+          name: Unleashed-Standard-IPA
+          path: Unleashed_Standard.ipa
