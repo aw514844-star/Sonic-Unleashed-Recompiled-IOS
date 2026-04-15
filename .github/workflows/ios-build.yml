@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS IPA
+name: Build Sonic Unleashed iOS
 
 on:
   push:
@@ -6,36 +6,49 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build_ios:
     runs-on: macos-latest
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Setup Build Environment
+      - name: Install Dependencies
         run: |
-          # Install dependencies (adjust based on your specific repo needs)
-          # e.g., brew install cmake
-          mkdir -p build Payload/Unleashed.app
+          brew install cmake ninja pkg-config
 
-      - name: Compile Game Engine
+      - name: Configure and Build
         run: |
-          # REPLACE THIS LINE with your actual build command
-          # (e.g., cmake .. && make or xcodebuild)
-          # For this example, we assume your binary is named 'UnleashedRecomp'
-          echo "Building..."
-          # cp path/to/compiled/binary Payload/Unleashed.app/UnleashedRecomp
+          # Standard CMake build for UnleashedRecomp
+          cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target UnleashedRecomp
 
-      - name: Fix Binary and Structure
+      - name: Create iOS Structure and Package
         run: |
-          # 1. MARK AS EXECUTABLE (Crucial to prevent instant crash)
+          # 1. Create the Payload folder
+          mkdir -p Payload/Unleashed.app
+
+          # 2. FIND THE BINARY (Smarter search to prevent 'No such file' error)
+          # This looks for the compiled engine file and moves it to the app bundle
+          BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f | head -n 1)
+          
+          if [ -z "$BINARY_PATH" ]; then
+            echo "❌ ERROR: Could not find the compiled binary! Check build logs above."
+            exit 1
+          fi
+          
+          echo "✅ Found binary at: $BINARY_PATH"
+          cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
+
+          # 3. FIX PERMISSIONS (Crucial for 100% fix)
+          # This marks the file as an executable program so iOS doesn't kill it
           chmod +x Payload/Unleashed.app/UnleashedRecomp
           
-          # 2. CREATE PKGINFO
+          # 4. CREATE PKGINFO
           echo -n "APPL????" > Payload/Unleashed.app/PkgInfo
 
-          # 3. GENERATE INFO.PLIST
+          # 5. GENERATE INFO.PLIST (Enables Files app folder)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -72,14 +85,11 @@ jobs:
           </plist>
           EOF
 
-      - name: Package IPA
-        run: |
-          # -r recursive, -y preserve symlinks/permissions
+          # 6. PACKAGE WITH ATTRIBUTES (-ry preserves the executable bit)
           zip -ry Sonic_Unleashed_iOS.ipa Payload
-          echo "IPA Size: $(du -sh Sonic_Unleashed_iOS.ipa)"
 
-      - name: Upload Artifact
+      - name: Upload Finished IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-IPA
+          name: Unleashed-iOS-IPA
           path: Sonic_Unleashed_iOS.ipa
