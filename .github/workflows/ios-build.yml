@@ -10,12 +10,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Setup CMake
-        uses: jwlawrence/actions-setup-cmake@v2
-
       - name: Generate and Build
         run: |
-          # 1. GENERATE THE PROJECT (This creates the missing .xcodeproj)
+          # 1. GENERATE THE PROJECT (Fixes the missing .xcodeproj error)
+          # We use the built-in 'cmake' command on the macOS runner
           mkdir -p build_ios
           cd build_ios
           cmake .. -G Xcode \
@@ -26,9 +24,9 @@ jobs:
           # 2. FIND THE GENERATED PROJECT
           PROJECT_FILE=$(find . -name "*.xcodeproj" | head -n 1)
           if [ -z "$PROJECT_FILE" ]; then echo "GENERATION FAILED"; exit 1; fi
+          echo "GENERATED PROJECT FOUND: $PROJECT_FILE"
           
           # 3. BUILD
-          # Using -derivedDataPath ../DerivedData so the next step can find the binary
           xcodebuild build -project "$PROJECT_FILE" \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
@@ -41,8 +39,8 @@ jobs:
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # MAGIC NUMBER FIX (Stops 0x69636e73 error)
-          # Specifically looking for the Mach-O binary in the new DerivedData path
+          # MAGIC NUMBER FIX (Stops iLoader 0x69636e73 error)
+          # This ensures iLoader signs the Mach-O binary and not an icon
           RAW_BINARY=$(find ./DerivedData -type f | xargs file | grep "Mach-O" | grep "executable" | cut -d: -f1 | head -n 1)
           
           if [ -z "$RAW_BINARY" ]; then
@@ -58,11 +56,11 @@ jobs:
           # 50MB SIZE VACUUM (Libraries & Assets)
           find ./DerivedData -name "*.dylib" -exec cp {} Payload/Unleashed.app/ \; || true
           
-          # Copy private and resource folders if they exist
+          # Copy resources/private folders from your directory list
           [ -d "private" ] && cp -r private/* Payload/Unleashed.app/
           [ -d "UnleashedRecompResources" ] && cp -r UnleashedRecompResources/* Payload/Unleashed.app/
           
-          # Deep vacuum assets to hit 50MB
+          # Deep vacuum assets to hit 50MB+ target
           find . -type d \( -name "assets" -o -name "data" -o -name "textures" \) -not -path "./DerivedData/*" -not -path "*/thirdparty/*" -exec cp -r {} Payload/Unleashed.app/ \; || true
 
           # INFO.PLIST
@@ -78,7 +76,7 @@ jobs:
               <key>CFBundleVersion</key><string>1</string>
               <key>LSRequiresIPhoneOS</key><true/>
               <key>MinimumOSVersion</key><string>15.0</string>
-              <key>UIDeviceFamily</key><array><integer.1</integer><integer.2</integer></array>
+              <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
           </dict></plist>
           EOF
 
