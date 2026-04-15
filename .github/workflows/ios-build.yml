@@ -1,4 +1,4 @@
-name: Sonic Unleashed Final - Hardened
+name: Sonic Unleashed Recompiled for IOS
 on: [workflow_dispatch, push]
 
 jobs:
@@ -12,15 +12,18 @@ jobs:
 
       - name: Build
         run: |
-          # Find project or workspace automatically
-          PROJECT_FILE=$(find . -name "*.xcodeproj" -o -name "*.xcworkspace" | head -n 1)
-          if [ -z "$PROJECT_FILE" ]; then echo "ERROR: No project found!"; exit 1; fi
+          # FIX: Ignore 'thirdparty' or 'build' folders to find the REAL project
+          PROJECT_FILE=$(find . -maxdepth 3 -name "*.xcodeproj" -not -path "*/thirdparty/*" -not -path "*/build/*" | head -n 1)
           
-          TYPE_FLAG="-project"
-          if [[ "$PROJECT_FILE" == *.xcworkspace ]]; then TYPE_FLAG="-workspace"; fi
+          if [ -z "$PROJECT_FILE" ]; then 
+            echo "Main project not found in root. Searching all..."
+            PROJECT_FILE=$(find . -name "*.xcodeproj" -not -path "*/thirdparty/*" | head -n 1)
+          fi
 
-          # Clean and build into local directory
-          xcodebuild build $TYPE_FLAG "$PROJECT_FILE" \
+          if [ -z "$PROJECT_FILE" ]; then echo "ERROR: Could not find the main .xcodeproj!"; exit 1; fi
+          echo "Using Project: $PROJECT_FILE"
+
+          xcodebuild build -project "$PROJECT_FILE" \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
             -configuration Release \
@@ -37,12 +40,10 @@ jobs:
           rm -rf Payload
           mkdir -p Payload/Unleashed.app
           
-          # 2. FIX MAGIC NUMBER: Force find ONLY the Mach-O executable
-          # This specifically stops the 0x69636e73 (icon) error in iLoader
+          # 2. FIX MAGIC NUMBER: Ensure it's a Mach-O (Fixes 0x69636e73 error)
           RAW_BINARY=$(find ./DerivedData -name "UnleashedRecomp" -type f | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           
           if [ -z "$RAW_BINARY" ]; then
-            echo "Binary search failed. Trying deep search..."
             RAW_BINARY=$(find ./DerivedData -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           fi
 
@@ -51,17 +52,16 @@ jobs:
           cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # 3. FIX EMPTY IPA (TARGET 50MB+): Deep scan for assets and libraries
-          # First, grab all compiled libraries
+          # 3. FIX EMPTY IPA (TARGET 50MB+): Pack assets and libraries
           find ./DerivedData -name "*.dylib" -exec cp {} Payload/Unleashed.app/ \; || true
           
-          # Second, grab the Private Lib folder
+          # Force copy library files
           if [ -d "UnleashedRecompLib/Private" ]; then
             cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/
           fi
 
-          # Third, search for any folder named 'assets', 'data', or 'textures' to reach 50MB+
-          find . -type d \( -name "assets" -o -name "data" -o -name "textures" \) -not -path "./DerivedData/*" -exec cp -r {} Payload/Unleashed.app/ \; || true
+          # Deep scan for assets to ensure 50MB+ size
+          find . -type d \( -name "assets" -o -name "data" -o -name "textures" \) -not -path "./DerivedData/*" -not -path "./thirdparty/*" -exec cp -r {} Payload/Unleashed.app/ \; || true
 
           # 4. FIX INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
