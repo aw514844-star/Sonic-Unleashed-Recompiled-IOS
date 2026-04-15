@@ -12,24 +12,25 @@ jobs:
 
       - name: Build
         run: |
-          # 1. FORCE PROJECT DISCOVERY (Solves Error 66 & 65)
-          # We search for any xcodeproj but specifically EXCLUDE the thirdparty one that caused the previous crash
-          PROJECT_FILE=$(find . -name "*.xcodeproj" ! -path "*/thirdparty/*" | head -n 1)
+          # 1. SMART PROJECT DISCOVERY
+          # We look for an xcodeproj that actually has "Unleashed" in the filename
+          # and explicitly ignore 'thirdparty', 'examples', and 'build' folders.
+          PROJECT_FILE=$(find . -name "*Unleashed*.xcodeproj" -not -path "*/thirdparty/*" -not -path "*/examples/*" -not -path "*/build/*" | head -n 1)
           
+          # FALLBACK: If no "Unleashed" named project, find the biggest one that isn't thirdparty
           if [ -z "$PROJECT_FILE" ]; then
-            echo "Brute forcing search for any project..."
-            PROJECT_FILE=$(find . -name "*.xcodeproj" | grep -v "concurrentqueue" | head -n 1)
+            PROJECT_FILE=$(find . -name "*.xcodeproj" -not -path "*/thirdparty/*" -not -path "*/examples/*" | head -n 1)
           fi
 
           if [ -z "$PROJECT_FILE" ]; then
-            echo "CRITICAL: No project file found. Listing directory for debug:"
-            ls -R
+            echo "CRITICAL: Main project not found. Listing all xcodeproj files for debug:"
+            find . -name "*.xcodeproj"
             exit 1
           fi
 
           echo "TARGET PROJECT: $PROJECT_FILE"
 
-          # 2. XCODEBUILD (Hardened for Dev Accounts)
+          # 2. XCODEBUILD
           xcodebuild build -project "$PROJECT_FILE" \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
@@ -39,48 +40,42 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
-            AD_HOC_CODE_SIGN_ALLOWED=YES
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
 
       - name: Emergency Inject & Fix
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # 3. MAGIC NUMBER FIX (Solves 0x69636e73 error for iLoader)
-          # We check the file header to ensure it's a Mach-O binary and NOT an icon
+          # 3. MAGIC NUMBER FIX (Stops 0x69636e73 error)
           RAW_BINARY=$(find ./DerivedData -name "UnleashedRecomp" -type f | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           
           if [ -z "$RAW_BINARY" ]; then
-            echo "Primary binary search failed, performing deep scan for Mach-O files..."
             RAW_BINARY=$(find ./DerivedData -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           fi
 
-          if [ -z "$RAW_BINARY" ]; then
-            echo "ERROR: Executable not found in DerivedData. Searching workspace..."
-            RAW_BINARY=$(find . -type f -perm +111 -name "UnleashedRecomp" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
+          if [ -z "$RAW_BINARY" ]; then 
+             echo "Binary not found in DerivedData, searching workspace..."
+             RAW_BINARY=$(find . -type f -perm +111 -name "UnleashedRecomp" -not -path "*/thirdparty/*" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           fi
-
+          
           if [ -z "$RAW_BINARY" ]; then exit 1; fi
           
-          echo "VALID BINARY FOUND: $RAW_BINARY"
           cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # 4. 50MB SIZE FIX (Asset & Library Vacuum)
-          # Grab all dynamic libraries to prevent launch crashes
+          # 4. 50MB SIZE FIX (Asset Vacuum)
           find ./DerivedData -name "*.dylib" -exec cp {} Payload/Unleashed.app/ \; || true
-          
-          # Grab known library folder
           if [ -d "UnleashedRecompLib/Private" ]; then
             cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/
           fi
           
-          # Vacuum up everything that looks like game data to ensure the 50MB+ target
+          # Force inclusion of all data folders to ensure the 50MB size
           find . -type d \( -name "assets" -o -name "data" -o -name "textures" -o -name "res" \) \
             -not -path "./DerivedData/*" \
             -not -path "*/thirdparty/*" \
             -exec cp -r {} Payload/Unleashed.app/ \; || true
 
-          # 5. INFO.PLIST GENERATION (Strict iLoader Format)
+          # 5. INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -99,9 +94,7 @@ jobs:
           </plist>
           EOF
 
-          # 6. PACKAGING
           zip -r Unleashed_Final.ipa Payload
-          echo "SUCCESS: IPA generated."
           echo "FINAL SIZE: $(du -sh Unleashed_Final.ipa)"
 
       - name: Upload
