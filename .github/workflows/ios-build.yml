@@ -9,28 +9,34 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Build
         run: |
-          # 1. SMART PROJECT DISCOVERY
-          # We look for an xcodeproj that actually has "Unleashed" in the filename
-          # and explicitly ignore 'thirdparty', 'examples', and 'build' folders.
-          PROJECT_FILE=$(find . -name "*Unleashed*.xcodeproj" -not -path "*/thirdparty/*" -not -path "*/examples/*" -not -path "*/build/*" | head -n 1)
-          
-          # FALLBACK: If no "Unleashed" named project, find the biggest one that isn't thirdparty
+          # 1. ENSURE CODE IS HERE
+          git submodule update --init --recursive
+
+          # 2. FIND PROJECT (Ignoring thirdparty strictly)
+          # We look for the xcodeproj that is closest to the root and NOT in thirdparty
+          PROJECT_FILE=$(find . -name "*.xcodeproj" -not -path "*/thirdparty/*" | head -n 1)
+
           if [ -z "$PROJECT_FILE" ]; then
-            PROJECT_FILE=$(find . -name "*.xcodeproj" -not -path "*/thirdparty/*" -not -path "*/examples/*" | head -n 1)
+            echo "STILL NOT FOUND. Listing every single xcodeproj in the repo:"
+            find . -name "*.xcodeproj"
+            echo "Searching for workspaces instead..."
+            PROJECT_FILE=$(find . -name "*.xcworkspace" -not -path "*/thirdparty/*" | head -n 1)
           fi
 
           if [ -z "$PROJECT_FILE" ]; then
-            echo "CRITICAL: Main project not found. Listing all xcodeproj files for debug:"
-            find . -name "*.xcodeproj"
+            echo "CRITICAL: The main game project is MISSING from the repo."
+            echo "Current Directory Content:"
+            ls -F
             exit 1
           fi
 
-          echo "TARGET PROJECT: $PROJECT_FILE"
+          echo "TARGET PROJECT FOUND: $PROJECT_FILE"
 
-          # 2. XCODEBUILD
+          # 3. BUILD
           xcodebuild build -project "$PROJECT_FILE" \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
@@ -38,49 +44,36 @@ jobs:
             -derivedDataPath ./DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
       - name: Emergency Inject & Fix
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # 3. MAGIC NUMBER FIX (Stops 0x69636e73 error)
+          # MAGIC NUMBER FIX
           RAW_BINARY=$(find ./DerivedData -name "UnleashedRecomp" -type f | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           
           if [ -z "$RAW_BINARY" ]; then
             RAW_BINARY=$(find ./DerivedData -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           fi
 
-          if [ -z "$RAW_BINARY" ]; then 
-             echo "Binary not found in DerivedData, searching workspace..."
-             RAW_BINARY=$(find . -type f -perm +111 -name "UnleashedRecomp" -not -path "*/thirdparty/*" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
-          fi
-          
           if [ -z "$RAW_BINARY" ]; then exit 1; fi
           
           cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # 4. 50MB SIZE FIX (Asset Vacuum)
+          # SIZE FIX (50MB Goal)
           find ./DerivedData -name "*.dylib" -exec cp {} Payload/Unleashed.app/ \; || true
-          if [ -d "UnleashedRecompLib/Private" ]; then
-            cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/
-          fi
+          [ -d "UnleashedRecompLib/Private" ] && cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/
           
-          # Force inclusion of all data folders to ensure the 50MB size
-          find . -type d \( -name "assets" -o -name "data" -o -name "textures" -o -name "res" \) \
-            -not -path "./DerivedData/*" \
-            -not -path "*/thirdparty/*" \
-            -exec cp -r {} Payload/Unleashed.app/ \; || true
+          # Grab all assets
+          find . -type d \( -name "assets" -o -name "data" -o -name "textures" \) -not -path "./DerivedData/*" -not -path "*/thirdparty/*" -exec cp -r {} Payload/Unleashed.app/ \; || true
 
-          # 5. INFO.PLIST
+          # INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0">
-          <dict>
+          <plist version="1.0"><dict>
               <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
               <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
               <key>CFBundleName</key><string>Unleashed</string>
@@ -89,9 +82,7 @@ jobs:
               <key>CFBundleVersion</key><string>1</string>
               <key>LSRequiresIPhoneOS</key><true/>
               <key>MinimumOSVersion</key><string>15.0</string>
-              <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
-          </dict>
-          </plist>
+          </dict></plist>
           EOF
 
           zip -r Unleashed_Final.ipa Payload
