@@ -1,5 +1,7 @@
 name: Sonic Unleashed Final
-on: [workflow_dispatch, push]
+on:
+  workflow_dispatch:
+  push:
 
 jobs:
   build:
@@ -12,7 +14,6 @@ jobs:
 
       - name: Build Engine
         run: |
-          # Use a dedicated local directory to avoid 'No such file or directory' errors
           mkdir -p BuildDir
           xcodebuild build \
             -scheme "UnleashedRecomp" \
@@ -29,13 +30,12 @@ jobs:
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # 1. FIX: Magic Number / iLoader Parsing Error
-          # 'file' command ensures we grab a Mach-O binary and EXCLUDE icons (0x69636e73)
-          RAW_BINARY=$(find ./BuildDir -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
+          # 1. FIND THE REAL MACH-O BINARY (Fixes Magic Number / iLoader error)
+          # Specifically looking for the arm64 executable
+          RAW_BINARY=$(find ./BuildDir -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
           
           if [ -z "$RAW_BINARY" ]; then 
-            # Fallback search if the primary path is weird
-            RAW_BINARY=$(find . -type f -size +1M -perm +111 | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
+            RAW_BINARY=$(find . -type f -size +1M -perm +111 | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
           fi
           
           if [ -n "$RAW_BINARY" ]; then
@@ -43,20 +43,19 @@ jobs:
             cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
             chmod +x Payload/Unleashed.app/UnleashedRecomp
           else
-            echo "ERROR: No valid executable binary found. Build likely failed."
+            echo "ERROR: No valid Mach-O binary found."
             exit 1
           fi
 
-          # 2. Asset Injection (Ensures IPA size > 11MB and boots)
+          # 2. ASSET INJECTION (Fixes Black Icon and Initial Crash)
           ASSET_PATH="UnleashedRecompLib/Private"
           if [ -d "$ASSET_PATH" ]; then
             echo "Injecting game assets from $ASSET_PATH..."
             cp -r "$ASSET_PATH"/* Payload/Unleashed.app/
-          else
-            echo "WARNING: $ASSET_PATH not found."
           fi
 
-          # 3. Create Info.plist (Fixed for any sideloader compatibility)
+          # 3. CREATE BULLETPROOF INFO.PLIST (Fixes Files App Visibility)
+          # Added UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -68,19 +67,29 @@ jobs:
               <string>com.unleashed.recomp</string>
               <key>CFBundleName</key>
               <string>Unleashed</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>1.0</string>
-              <key>CFBundleVersion</key><string>1</string>
-              <key>LSRequiresIPhoneOS</key><true/>
-              <key>MinimumOSVersion</key><string>15.0</string>
-              <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>MinimumOSVersion</key>
+              <string>15.0</string>
+              <key>UIFileSharingEnabled</key>
+              <true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key>
+              <true/>
+              <key>UIDeviceFamily</key>
+              <array><integer>1</integer><integer>2</integer></array>
           </dict>
           </plist>
           EOF
           
-          # 4. Final Packaging (Standard IPA structure)
+          # 4. FINAL PACKAGING
           zip -r Unleashed_Standard.ipa Payload
-          echo "FINAL IPA SIZE: $(stat -f%z Unleashed_Standard.ipa) bytes"
+          echo "FINAL IPA SIZE: $(du -sh Unleashed_Standard.ipa)"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
