@@ -1,5 +1,7 @@
 name: Sonic Unleashed Final
-on: [workflow_dispatch, push]
+on:
+  workflow_dispatch:
+  push:
 
 jobs:
   build:
@@ -10,46 +12,60 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build
+      - name: Build Engine
         run: |
-          set +e
-          # Added -derivedDataPath so we know exactly where the 'magic' files are
-          xcodebuild build -scheme "UnleashedRecomp" -sdk iphoneos -configuration Release -derivedDataPath ./BuildDir CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE_SPECIFIER="" AD_HOC_CODE_SIGNING_ALLOWED=YES || true
-          exit 0
+          # Build with a fixed path to find the output easily
+          xcodebuild build \
+            -scheme "UnleashedRecomp" \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath ./BuildDir \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES || true
 
-      - name: Emergency Inject
+      - name: Emergency Inject and Package
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # 1. Improved Search: Look for Mach-O executables specifically to avoid 'Magic Number' errors
-          # This looks for files in the build folder that are over 1MB and are actual binaries
+          # 1. Find the REAL Mach-O executable (Fixes "Magic Number" error)
+          # We look specifically for files over 1MB with executable permissions
           RAW_BINARY=$(find ./BuildDir -type f -size +1M -perm +111 2>/dev/null | head -n 1)
-          
           if [ -z "$RAW_BINARY" ]; then 
-            RAW_BINARY=$(find . -type f -size +1M -perm +111 | head -n 1); 
+            RAW_BINARY=$(find . -type f -size +1M -perm +111 | head -n 1)
           fi
           
-          # 2. Force rename and permissions
           if [ -n "$RAW_BINARY" ]; then
-            echo "Found binary at: $RAW_BINARY"
+            echo "SUCCESS: Found binary at $RAW_BINARY"
             cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
             chmod +x Payload/Unleashed.app/UnleashedRecomp
           else
-            echo "ERROR: No valid executable binary found!"
+            echo "ERROR: No valid executable binary found. Check your build logs."
             exit 1
           fi
 
-          # 3. Standard Identity Card (Your original Plist)
-          echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>UnleashedRecomp</string><key>CFBundleIdentifier</key><string>com.unleashed.recomp</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>LSRequiresIPhoneOS</key><true/><key>MinimumOSVersion</key><string>15.0</string></dict></plist>' > Payload/Unleashed.app/Info.plist
-          
-          # 4. Move private files (shv, xex, etc)
-          cp UnleashedRecompLib/Private/* Payload/Unleashed.app/ || true
-          
-          # 5. Zip
-          zip -r Unleashed_Standard.ipa Payload
-          echo "IPA SIZE: $(stat -f%z Unleashed_Standard.ipa) bytes"
+          # 2. Asset Injection (Critical for booting)
+          # Note: Case-sensitive path. Using 'UnleashedRecompLib/Private'
+          ASSET_PATH="UnleashedRecompLib/Private"
+          if [ -d "$ASSET_PATH" ]; then
+            echo "Injecting game assets from $ASSET_PATH..."
+            cp -v "$ASSET_PATH"/* Payload/Unleashed.app/
+          else
+            echo "WARNING: $ASSET_PATH not found. IPA will be small (engine only)."
+          fi
 
-      - name: Upload
+          # 3. Create Info.plist (Standard Identity)
+          echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>UnleashedRecomp</string><key>CFBundleIdentifier</key><string>com.unleashed.recomp</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>LSRequiresIPhoneOS</key><true/><key>MinimumOSVersion</key><string>15.0</string><key>UILaunchStoryboardName</key><string>LaunchScreen</string></dict></plist>' > Payload/Unleashed.app/Info.plist
+          
+          # 4. Final Packaging
+          zip -r Unleashed_Standard.ipa Payload
+          
+          # Output size to check if assets were included (should be >11MB)
+          echo "FINAL IPA SIZE: $(stat -f%z Unleashed_Standard.ipa) bytes"
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Unleashed-Standard-IPA
