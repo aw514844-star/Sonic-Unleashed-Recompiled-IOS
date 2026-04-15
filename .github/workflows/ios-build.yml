@@ -9,52 +9,45 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0
 
-      - name: Build
+      - name: Setup CMake
+        uses: jwlawrence/actions-setup-cmake@v2
+
+      - name: Generate and Build
         run: |
-          # 1. ENSURE CODE IS HERE
-          git submodule update --init --recursive
+          # 1. GENERATE THE PROJECT (This creates the missing .xcodeproj)
+          mkdir -p build_ios
+          cd build_ios
+          cmake .. -G Xcode \
+                   -DCMAKE_SYSTEM_NAME=iOS \
+                   -DCMAKE_OSX_SYSROOT=iphoneos \
+                   -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
 
-          # 2. FIND PROJECT (Ignoring thirdparty strictly)
-          # We look for the xcodeproj that is closest to the root and NOT in thirdparty
-          PROJECT_FILE=$(find . -name "*.xcodeproj" -not -path "*/thirdparty/*" | head -n 1)
-
-          if [ -z "$PROJECT_FILE" ]; then
-            echo "STILL NOT FOUND. Listing every single xcodeproj in the repo:"
-            find . -name "*.xcodeproj"
-            echo "Searching for workspaces instead..."
-            PROJECT_FILE=$(find . -name "*.xcworkspace" -not -path "*/thirdparty/*" | head -n 1)
-          fi
-
-          if [ -z "$PROJECT_FILE" ]; then
-            echo "CRITICAL: The main game project is MISSING from the repo."
-            echo "Current Directory Content:"
-            ls -F
-            exit 1
-          fi
-
-          echo "TARGET PROJECT FOUND: $PROJECT_FILE"
-
+          # 2. FIND THE GENERATED PROJECT
+          PROJECT_FILE=$(find . -name "*.xcodeproj" | head -n 1)
+          if [ -z "$PROJECT_FILE" ]; then echo "GENERATION FAILED"; exit 1; fi
+          
           # 3. BUILD
+          # Using -derivedDataPath ../DerivedData so the next step can find the binary
           xcodebuild build -project "$PROJECT_FILE" \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
             -configuration Release \
-            -derivedDataPath ./DerivedData \
+            -derivedDataPath ../DerivedData \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
+            CODE_SIGNING_REQUIRED=NO
 
       - name: Emergency Inject & Fix
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # MAGIC NUMBER FIX
-          RAW_BINARY=$(find ./DerivedData -name "UnleashedRecomp" -type f | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
+          # MAGIC NUMBER FIX (Stops 0x69636e73 error)
+          # Specifically looking for the Mach-O binary in the new DerivedData path
+          RAW_BINARY=$(find ./DerivedData -type f | xargs file | grep "Mach-O" | grep "executable" | cut -d: -f1 | head -n 1)
           
           if [ -z "$RAW_BINARY" ]; then
-            RAW_BINARY=$(find ./DerivedData -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
+            echo "Searching fallback for executable..."
+            RAW_BINARY=$(find ./DerivedData -type f -perm +111 ! -name "*.dylib" | head -n 1)
           fi
 
           if [ -z "$RAW_BINARY" ]; then exit 1; fi
@@ -62,11 +55,14 @@ jobs:
           cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # SIZE FIX (50MB Goal)
+          # 50MB SIZE VACUUM (Libraries & Assets)
           find ./DerivedData -name "*.dylib" -exec cp {} Payload/Unleashed.app/ \; || true
-          [ -d "UnleashedRecompLib/Private" ] && cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/
           
-          # Grab all assets
+          # Copy private and resource folders if they exist
+          [ -d "private" ] && cp -r private/* Payload/Unleashed.app/
+          [ -d "UnleashedRecompResources" ] && cp -r UnleashedRecompResources/* Payload/Unleashed.app/
+          
+          # Deep vacuum assets to hit 50MB
           find . -type d \( -name "assets" -o -name "data" -o -name "textures" \) -not -path "./DerivedData/*" -not -path "*/thirdparty/*" -exec cp -r {} Payload/Unleashed.app/ \; || true
 
           # INFO.PLIST
@@ -82,13 +78,14 @@ jobs:
               <key>CFBundleVersion</key><string>1</string>
               <key>LSRequiresIPhoneOS</key><true/>
               <key>MinimumOSVersion</key><string>15.0</string>
+              <key>UIDeviceFamily</key><array><integer.1</integer><integer.2</integer></array>
           </dict></plist>
           EOF
 
           zip -r Unleashed_Final.ipa Payload
           echo "FINAL SIZE: $(du -sh Unleashed_Final.ipa)"
 
-      - name: Upload
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Unleashed-Final-IPA
