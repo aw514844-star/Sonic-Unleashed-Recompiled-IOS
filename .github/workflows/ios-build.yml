@@ -1,7 +1,5 @@
-name: Sonic Unleashed Final
-on:
-  workflow_dispatch:
-  push:
+name: Sonic Unleashed Final - BUILD 200
+on: [workflow_dispatch, push]
 
 jobs:
   build:
@@ -15,6 +13,7 @@ jobs:
       - name: Build Engine
         run: |
           mkdir -p BuildDir
+          # Standard xcodebuild targeting iPad A16
           xcodebuild build \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
@@ -22,77 +21,68 @@ jobs:
             -derivedDataPath ./BuildDir \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES || true
 
-      - name: Emergency Inject and Package
+      - name: Ultimate Final Inject
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # 1. FIND THE REAL MACH-O BINARY (Fixes Magic Number / iLoader error)
-          # Specifically looking for the arm64 executable
+          # 1. FIND & VERIFY BINARY (Kills iLoader 0x69636e73 Magic Number Error)
           RAW_BINARY=$(find ./BuildDir -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
           
-          if [ -z "$RAW_BINARY" ]; then 
+          if [ -z "$RAW_BINARY" ]; then
             RAW_BINARY=$(find . -type f -size +1M -perm +111 | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
           fi
           
-          if [ -n "$RAW_BINARY" ]; then
-            echo "SUCCESS: Found valid binary at $RAW_BINARY"
-            cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
-            chmod +x Payload/Unleashed.app/UnleashedRecomp
-          else
-            echo "ERROR: No valid Mach-O binary found."
-            exit 1
+          if [ -z "$RAW_BINARY" ]; then
+             echo "CRITICAL ERROR: No ARM64 binary found."
+             exit 1
           fi
 
-          # 2. ASSET INJECTION (Fixes Black Icon and Initial Crash)
-          ASSET_PATH="UnleashedRecompLib/Private"
-          if [ -d "$ASSET_PATH" ]; then
-            echo "Injecting game assets from $ASSET_PATH..."
-            cp -r "$ASSET_PATH"/* Payload/Unleashed.app/
+          cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
+          chmod +x Payload/Unleashed.app/UnleashedRecomp
+
+          # 2. THE CRASH KILLER: Force Metal API (Fixes the 2-second crash for A16 iPad)
+          # We create the config.toml file directly in the app bundle to bypass Vulkan
+          cat <<EOF > Payload/Unleashed.app/config.toml
+          [Video]
+          GraphicsAPI = "Metal"
+          EOF
+
+          # 3. ASSET INJECTION (Moves shaders to the root for instant detection)
+          if [ -d "UnleashedRecompLib/Private" ]; then
+            echo "Injecting Private Assets..."
+            cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/
           fi
 
-          # 3. CREATE BULLETPROOF INFO.PLIST (Fixes Files App Visibility)
+          # 4. FILES APP VISIBILITY: Force the Unleashed folder to show up
           # Added UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
           <plist version="1.0">
           <dict>
-              <key>CFBundleExecutable</key>
-              <string>UnleashedRecomp</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.unleashed.recomp</string>
-              <key>CFBundleName</key>
-              <string>Unleashed</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>LSRequiresIPhoneOS</key>
-              <true/>
-              <key>MinimumOSVersion</key>
-              <string>15.0</string>
-              <key>UIFileSharingEnabled</key>
-              <true/>
-              <key>LSSupportsOpeningDocumentsInPlace</key>
-              <true/>
-              <key>UIDeviceFamily</key>
-              <array><integer>1</integer><integer>2</integer></array>
+              <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
+              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
+              <key>CFBundleName</key><string>Unleashed</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>CFBundleVersion</key><string>1</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>MinimumOSVersion</key><string>15.0</string>
+              <key>UIFileSharingEnabled</key><true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+              <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
           </dict>
           </plist>
           EOF
           
-          # 4. FINAL PACKAGING
-          zip -r Unleashed_Standard.ipa Payload
-          echo "FINAL IPA SIZE: $(du -sh Unleashed_Standard.ipa)"
+          # 5. PACKAGING
+          zip -r Unleashed_Final.ipa Payload
+          echo "FINAL IPA SIZE: $(du -sh Unleashed_Final.ipa)"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Standard-IPA
-          path: Unleashed_Standard.ipa
+          name: Unleashed-Final-IPA
+          path: Unleashed_Final.ipa
