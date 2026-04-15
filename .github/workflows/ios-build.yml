@@ -1,4 +1,4 @@
-name: Sonic Unleashed Final - INFINITE SUCCESS
+name: Sonic Unleashed Final - EMERGENCY
 on: [workflow_dispatch, push]
 
 jobs:
@@ -10,37 +10,32 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Dependencies
+      - name: Force Install Dependencies
         run: |
-          # 1. FORCE LIBS
-          brew install freetype pkg-config zstd sdl2
-          # Force link so headers are in /usr/local/include
+          # Install Freetype, CURL, and SDL2 dependencies
+          brew install freetype pkg-config zstd sdl2 curl
           brew link --force freetype
+          brew link --force curl
 
-      - name: Generate and Build
+      - name: Fast Generate and Build
         run: |
-          # 2. ENVIRONMENT HACKS
-          export FREETYPE_DIR=$(brew --prefix freetype)
-          export CPATH=$FREETYPE_DIR/include/freetype2:$CPATH
-          export LIBRARY_PATH=$(brew --prefix freetype)/lib:$LIBRARY_PATH
+          mkdir -p build_ios && cd build_ios
           
-          mkdir -p build_ios
-          cd build_ios
-          
-          # 3. ROBUST CMAKE (Bypassing detection errors)
+          # 1. DISABLE ALL SIGNING & FIX CURL
+          # Adding NO_SIGNING flags for both CMake and the project logic
           cmake .. -G Xcode \
                    -DCMAKE_SYSTEM_NAME=iOS \
                    -DCMAKE_OSX_SYSROOT=iphoneos \
-                   -DFREETYPE_INCLUDE_DIRS=$FREETYPE_DIR/include/freetype2 \
-                   -DFREETYPE_LIBRARY=$FREETYPE_DIR/lib/libfreetype.dylib \
+                   -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
                    -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
                    -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-                   -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO
+                   -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+                   -DCMAKE_XCODE_ATTRIBUTE_PROVISIONING_PROFILE_SPECIFIER="" \
+                   -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO \
+                   -DSDL_STATIC=ON -DSDL_SHARED=OFF
 
-          # 4. FIND & BUILD
+          # 2. LOCATE AND COMPILE
           PROJECT_FILE=$(find . -name "*.xcodeproj" | head -n 1)
-          if [ -z "$PROJECT_FILE" ]; then echo "CMAKE FAILED"; exit 1; fi
-          
           xcodebuild build -project "$PROJECT_FILE" \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
@@ -48,65 +43,35 @@ jobs:
             -derivedDataPath ../DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            OTHER_LDFLAGS="-Wl,-headerpad_max_install_names"
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            -parallelizeTargets -jobs 4
 
-      - name: Emergency Inject & Fix
+      - name: Instant Inject & Package
         run: |
           mkdir -p Payload/Unleashed.app
           
-          # 5. THE MAGIC NUMBER FIX (0x69636e73 KILLER)
-          # We scan for the REAL Mach-O executable with highest priority
-          RAW_BINARY=$(find ./DerivedData -path "*/Release-iphoneos/*" -type f | xargs file | grep "Mach-O" | grep "executable" | cut -d: -f1 | head -n 1)
+          # 3. FIND THE BINARY (Fixes iLoader 0x69636e73 error)
+          RAW_BINARY=$(find ./DerivedData -path "*/Release-iphoneos/*" -type f | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
           
           if [ -z "$RAW_BINARY" ]; then
-            echo "Binary not in DerivedData. Searching build folder..."
-            RAW_BINARY=$(find . -name "UnleashedRecomp" -type f | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
+            RAW_BINARY=$(find . -type f -perm +111 -name "UnleashedRecomp" | head -n 1)
           fi
-
-          if [ -n "$RAW_BINARY" ]; then
-            echo "SUCCESS: Found valid binary at $RAW_BINARY"
-            cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
-            chmod +x Payload/Unleashed.app/UnleashedRecomp
-          else
-            echo "CRITICAL: No binary found. Creating placeholder to prevent empty IPA error."
-            touch Payload/Unleashed.app/UnleashedRecomp
-          fi
-
-          # 6. 50MB+ SIZE VACUUM (Assets & Dylibs)
-          # Collect every dynamic library found in the build process
-          find ./ -name "*.dylib" -exec cp {} Payload/Unleashed.app/ \; || true
           
-          # Force include game resource folders
+          cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
+          chmod +x Payload/Unleashed.app/UnleashedRecomp
+
+          # 4. VACUUM ASSETS (TARGET 50MB+)
           [ -d "private" ] && cp -r private/* Payload/Unleashed.app/
           [ -d "UnleashedRecompResources" ] && cp -r UnleashedRecompResources/* Payload/Unleashed.app/
-          
-          # Brute-force vacuum for folders that contain game data
-          find . -type d \( -name "assets" -o -name "data" -o -name "textures" -o -name "res" \) \
-            -not -path "./DerivedData/*" -not -path "*/thirdparty/*" \
-            -exec cp -r {} Payload/Unleashed.app/ \; || true
+          find . -type d \( -name "assets" -o -name "data" -o -name "textures" \) -not -path "./DerivedData/*" -exec cp -r {} Payload/Unleashed.app/ \; || true
 
-          # 7. INFO.PLIST (Compatible with all sideloaders)
-          cat <<EOF > Payload/Unleashed.app/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0"><dict>
-              <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
-              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
-              <key>CFBundleName</key><string>Unleashed</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>1.0</string>
-              <key>CFBundleVersion</key><string>1</string>
-              <key>LSRequiresIPhoneOS</key><true/>
-              <key>MinimumOSVersion</key><string>15.0</string>
-              <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
-          </dict></plist>
-          EOF
+          # 5. INFO.PLIST
+          echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>UnleashedRecomp</string><key>CFBundleIdentifier</key><string>com.unleashed.recomp</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>LSRequiresIPhoneOS</key><true/><key>MinimumOSVersion</key><string>15.0</string></dict></plist>' > Payload/Unleashed.app/Info.plist
 
-          # 8. FINAL PACKAGING
           zip -r Unleashed_Final.ipa Payload
-          echo "IPA GENERATED. FINAL SIZE: $(du -sh Unleashed_Final.ipa)"
 
-      - name: Upload Artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: Unleashed-Final-IPA
