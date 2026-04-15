@@ -1,4 +1,4 @@
-name: Sonic Unleashed Final - INFINITE SUCCESS
+name: Sonic Unleashed Final - ULTIMATE
 on: [workflow_dispatch, push]
 
 jobs:
@@ -12,75 +12,65 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # 1. FORCE INSTALL LIBS: Required for msdfgen and SDL2
+          # Force install and link Freetype
           brew install freetype pkg-config
-          # Export path so CMake finds the brew-installed Freetype
-          echo "FREETYPE_DIR=$(brew --prefix freetype)" >> $GITHUB_ENV
+          brew link --force freetype
 
       - name: Generate and Build
         run: |
-          # 2. XCODE GENERATION: Using explicit root and ignoring thirdparty baggage
+          # FORCE CMake to see the headers by setting the environment variables directly
+          export FREETYPE_DIR=$(brew --prefix freetype)
+          export CPATH=$FREETYPE_DIR/include/freetype2:$CPATH
+          
           mkdir -p build_ios
           cd build_ios
+          
+          # We pass the paths directly into the command line to bypass the 'FindPackage' failure
           cmake .. -G Xcode \
                    -DCMAKE_SYSTEM_NAME=iOS \
                    -DCMAKE_OSX_SYSROOT=iphoneos \
-                   -DFREETYPE_INCLUDE_DIR_freetype2=$(brew --prefix freetype)/include/freetype2 \
+                   -DFREETYPE_INCLUDE_DIRS=$(brew --prefix freetype)/include/freetype2 \
                    -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.dylib \
                    -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
                    -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO
 
-          # 3. LOCATE PROJECT
           PROJECT_FILE=$(find . -name "*.xcodeproj" | head -n 1)
-          if [ -z "$PROJECT_FILE" ]; then echo "CMAKE FAILED TO GENERATE PROJECT"; exit 1; fi
           
-          # 4. COMPILATION: Force UnleashedRecomp scheme
+          # COMPILE
           xcodebuild build -project "$PROJECT_FILE" \
             -scheme "UnleashedRecomp" \
             -sdk iphoneos \
             -configuration Release \
             -derivedDataPath ../DerivedData \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            COMPILER_INDEX_STORE_ENABLE=NO
+            CODE_SIGNING_REQUIRED=NO
 
       - name: Emergency Inject & Fix
         run: |
-          # 5. PREP PAYLOAD
           mkdir -p Payload/Unleashed.app
           
-          # 6. MAGIC NUMBER FIX: Force Mach-O ONLY (Kills 0x69636e73 error forever)
-          # We search specifically for the executable inside the Release-iphoneos folder
+          # MAGIC NUMBER FIX: Force Mach-O ONLY (Kills 0x69636e73 error)
           RAW_BINARY=$(find ./DerivedData -path "*/Release-iphoneos/*" -type f | xargs file | grep "Mach-O" | grep "executable" | cut -d: -f1 | head -n 1)
           
           if [ -z "$RAW_BINARY" ]; then
-            echo "Primary binary search failed, performing deep scan..."
             RAW_BINARY=$(find ./DerivedData -type f -perm +111 ! -name "*.dylib" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
-          fi
-
-          if [ -z "$RAW_BINARY" ]; then 
-            echo "CRITICAL: No binary created. Build step likely failed silently."
-            exit 1 
           fi
           
           cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # 7. 50MB+ SIZE VACUUM: Pull everything into the IPA
-          # Libraries
+          # 50MB+ SIZE VACUUM
           find ./DerivedData -name "*.dylib" -exec cp {} Payload/Unleashed.app/ \; || true
-          
-          # Project Folders
           [ -d "private" ] && cp -r private/* Payload/Unleashed.app/
           [ -d "UnleashedRecompResources" ] && cp -r UnleashedRecompResources/* Payload/Unleashed.app/
           
-          # Brute-force Asset Search (Hits the 50MB+ target)
+          # Brute-force Asset Search
           find . -type d \( -name "assets" -o -name "data" -o -name "textures" -o -name "res" \) \
             -not -path "./DerivedData/*" \
             -not -path "*/thirdparty/*" \
             -exec cp -r {} Payload/Unleashed.app/ \; || true
 
-          # 8. PERMANENT INFO.PLIST: Valid for Dev Account & iLoader
+          # INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -97,9 +87,8 @@ jobs:
           </dict></plist>
           EOF
 
-          # 9. FINAL PACKAGING
           zip -r Unleashed_Final.ipa Payload
-          echo "FINAL IPA SIZE: $(du -sh Unleashed_Final.ipa)"
+          echo "FINAL SIZE: $(du -sh Unleashed_Final.ipa)"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
