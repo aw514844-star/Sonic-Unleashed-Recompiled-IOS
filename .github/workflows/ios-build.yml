@@ -12,91 +12,49 @@ jobs:
 
       - name: Build
         run: |
-          # Automatically find the project file to fix Error 66
           PROJECT_FILE=$(find . -name "*.xcodeproj" -o -name "*.xcworkspace" | head -n 1)
-          
-          if [ -z "$PROJECT_FILE" ]; then
-            echo "ERROR: No .xcodeproj or .xcworkspace found!"
-            exit 1
-          fi
+          if [ -z "$PROJECT_FILE" ]; then exit 1; fi
 
-          echo "Using Project: $PROJECT_FILE"
-
-          # Determine if we should use -project or -workspace
-          TYPE_FLAG="-project"
-          if [[ "$PROJECT_FILE" == *.xcworkspace ]]; then TYPE_FLAG="-workspace"; fi
-
-          xcodebuild build $TYPE_FLAG "$PROJECT_FILE" \
-            -scheme "UnleashedRecomp" \
-            -sdk iphoneos \
-            -configuration Release \
+          # Build into a specific local folder
+          xcodebuild build -scheme "UnleashedRecomp" -sdk iphoneos -configuration Release \
             -derivedDataPath ./DerivedData \
+            -project "$PROJECT_FILE" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      - name: Emergency Inject & Fix
+      - name: Package for iLoader
         run: |
-          mkdir -p Payload/Unleashed.app
+          mkdir -p Payload
           
-          # Find the real Mach-O binary (Fixes iLoader magic number error 0x69636e73)
-          RAW_BINARY=$(find ./DerivedData -name "UnleashedRecomp" -type f | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
+          # 1. Find the REAL .app bundle produced by Xcode (prevents magic number error)
+          REAL_APP=$(find ./DerivedData -name "*.app" -type d | head -n 1)
+          if [ -z "$REAL_APP" ]; then echo "Build failed"; exit 1; fi
           
-          if [ -z "$RAW_BINARY" ]; then 
-            echo "ERROR: Binary not found! Trying fallback search..."
-            RAW_BINARY=$(find ./DerivedData -type f -perm +111 -not -name "*.dylib" -not -name "*.plist" | head -n 1)
-          fi
-          
-          if [ -z "$RAW_BINARY" ]; then
-            echo "CRITICAL ERROR: No executable found."
-            exit 1
-          fi
-          
-          echo "Injecting binary: $RAW_BINARY"
-          cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
-          chmod +x Payload/Unleashed.app/UnleashedRecomp
+          # 2. Copy the whole bundle (keeps Info.plist and Icons correct)
+          cp -R "$REAL_APP" Payload/
+          APP_NAME=$(basename "$REAL_APP")
 
-          # Collect all .dylib libraries (Fixes launch crashes)
-          find ./DerivedData -name "*.dylib" -exec cp {} Payload/Unleashed.app/ \; || true
-          
-          # Inject Private Assets
+          # 3. Inject Assets (Ensures 11MB+ size)
           if [ -d "UnleashedRecompLib/Private" ]; then
-            cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/
+            cp -R UnleashedRecompLib/Private/* "Payload/$APP_NAME/"
           fi
 
-          # Generate clean Info.plist for iLoader
-          cat <<EOF > Payload/Unleashed.app/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key>
-              <string>UnleashedRecomp</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.unleashed.recomp</string>
-              <key>CFBundleName</key>
-              <string>Unleashed</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>LSRequiresIPhoneOS</key>
-              <true/>
-              <key>MinimumOSVersion</key>
-              <string>15.0</string>
-              <key>UIDeviceFamily</key>
-              <array><integer>1</integer><integer>2</integer></array>
-          </dict>
-          </plist>
-          EOF
+          # 4. Fix Binary Permissions
+          # Reads the executable name from the REAL Info.plist so it never mismatches
+          EXE_NAME=$(defaults read "$(pwd)/Payload/$APP_NAME/Info.plist" CFBundleExecutable)
+          chmod +x "Payload/$APP_NAME/$EXE_NAME"
 
-          # Package for iLoader
+          # 5. Clean up junk that confuses iLoader
+          find Payload -name "*.xcresult" -exec rm -rf {} + || true
+
           zip -r Unleashed_Final.ipa Payload
-          echo "FINISHED: IPA ready for dev account signing."
+          
+          # Verification
+          echo "IPA Size: $(du -sh Unleashed_Final.ipa)"
+          file "Payload/$APP_NAME/$EXE_NAME" # Should say "Mach-O 64-bit executable arm64"
 
       - name: Upload
         uses: actions/upload-artifact@v4
