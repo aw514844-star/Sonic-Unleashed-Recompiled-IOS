@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS
+name: Build Nerun Sonic Unleashed iOS
 
 on:
   push:
@@ -15,40 +15,37 @@ jobs:
           submodules: recursive
 
       - name: Install Dependencies
-        run: |
-          brew install cmake ninja pkg-config
+        run: brew install cmake ninja pkg-config
 
-      - name: Configure and Build
+      - name: Build for iOS
         run: |
-          # Standard CMake build for UnleashedRecomp
-          cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          # Targeting the specific plume/Metal implementation in Nerun's fork
+          cmake . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DENABLE_METAL=ON
           cmake --build build --target UnleashedRecomp
 
-      - name: Create iOS Structure and Package
+      - name: Create IPA for iILoader
         run: |
-          # 1. Create the Payload folder
           mkdir -p Payload/Unleashed.app
-
-          # 2. FIND THE BINARY (Smarter search to prevent 'No such file' error)
-          # This looks for the compiled engine file and moves it to the app bundle
+          
+          # Find and Move the 26MB binary
           BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f | head -n 1)
-          
-          if [ -z "$BINARY_PATH" ]; then
-            echo "❌ ERROR: Could not find the compiled binary! Check build logs above."
-            exit 1
-          fi
-          
-          echo "✅ Found binary at: $BINARY_PATH"
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
-
-          # 3. FIX PERMISSIONS (Crucial for 100% fix)
-          # This marks the file as an executable program so iOS doesn't kill it
-          chmod +x Payload/Unleashed.app/UnleashedRecomp
           
-          # 4. CREATE PKGINFO
-          echo -n "APPL????" > Payload/Unleashed.app/PkgInfo
+          # Crucial: Fix binary permissions for the iOS kernel
+          chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # 5. GENERATE INFO.PLIST (Enables Files app folder)
+          # Icon Fix (Place 'icon.png' in your repository's main folder)
+          if [ -f "icon.png" ]; then
+            cp icon.png Payload/Unleashed.app/AppIcon.png
+          else
+            touch Payload/Unleashed.app/AppIcon.png
+          fi
+
+          # Valid Info.plist for iOS 15+ (Enables File Sharing)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -62,6 +59,8 @@ jobs:
               <string>Unleashed</string>
               <key>CFBundleDisplayName</key>
               <string>Sonic Unleashed</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon.png</string>
               <key>CFBundlePackageType</key>
               <string>APPL</string>
               <key>CFBundleShortVersionString</key>
@@ -77,19 +76,17 @@ jobs:
               <key>LSSupportsOpeningDocumentsInPlace</key>
               <true/>
               <key>UIDeviceFamily</key>
-              <array>
-                  <integer>1</integer>
-                  <integer>2</integer>
-              </array>
+              <array><integer>1</integer><integer>2</integer></array>
           </dict>
           </plist>
           EOF
 
-          # 6. PACKAGE WITH ATTRIBUTES (-ry preserves the executable bit)
-          zip -ry Sonic_Unleashed_iOS.ipa Payload
+          # Packaging
+          echo -n "APPL????" > Payload/Unleashed.app/PkgInfo
+          zip -ry Sonic_Unleashed_Nerun_Fix.ipa Payload
 
-      - name: Upload Finished IPA
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iOS-IPA
-          path: Sonic_Unleashed_iOS.ipa
+          name: Unleashed-Nerun-IPA
+          path: Sonic_Unleashed_Nerun_Fix.ipa
