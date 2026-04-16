@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (Fixed Freetype & Metal)
+name: Build Sonic Unleashed iOS (vcpkg Final Fix)
 
 on:
   push:
@@ -14,47 +14,56 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Dependencies
+      - name: Install Build Tools
+        run: brew install cmake ninja pkg-config
+
+      - name: Setup vcpkg (iOS arm64)
         run: |
-          brew install cmake ninja pkg-config freetype curl fmt sdl2 sdl2_mixer sdl2_ttf
-          # Export path so the system finds freetype headers easily
-          echo "FREETYPE_DIR=$(brew --prefix freetype)" >> $GITHUB_ENV
+          # Clone into the root of the runner workspace
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git
+          ./vcpkg/bootstrap-vcpkg.sh
+          # Use the verified arm64-ios community triplet for physical iPads
+          ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios
 
       - name: Configure and Build
         run: |
-          # Explicitly pointing CMake to the Freetype files it's missing
           cmake . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_TARGET_TRIPLET=arm64-ios \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_BUILD_TYPE=Release \
             -DENABLE_METAL=ON \
             -DGRAPHICS_API=Metal \
             -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
-            -DCMAKE_CXX_FLAGS="-O3 -flto" \
-            -DFREETYPE_INCLUDE_DIRS=$(brew --prefix freetype)/include/freetype2 \
-            -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.dylib \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix fmt);$(brew --prefix sdl2);$(brew --prefix sdl2_mixer);$(brew --prefix sdl2_ttf);$(brew --prefix freetype)"
-          
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+            -DCMAKE_CXX_FLAGS="-O3 -flto"
+
           cmake --build build --target UnleashedRecomp
 
-      - name: Create Full IPA
+      - name: Create Validated IPA
         run: |
           mkdir -p Payload/Unleashed.app
 
-          # Locate and copy binary
-          BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -perm +111 | head -n 1)
-          if [ -z "$BINARY_PATH" ]; then echo "Binary not found"; exit 1; fi
-          cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
-          chmod +x Payload/Unleashed.app/UnleashedRecomp
+          # Check for bundle or raw binary
+          APP_PATH=$(find ./build -name "*.app" -type d | head -n 1)
+          if [ -n "$APP_PATH" ]; then
+            cp -R "$APP_PATH/." Payload/Unleashed.app/
+          else
+            BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -perm +111 | head -n 1)
+            [ -z "$BINARY_PATH" ] && exit 1
+            cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
+          fi
 
-          # Package Assets from your specific folder
+          # Essential Assets
           if [ -d "UnleashedRecompLib/private" ]; then
             mkdir -p Payload/Unleashed.app/private
             cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
           fi
 
-          # Info.plist for iPad 9 (File Sharing + Metal)
+          # Info.plist (Metal + File Sharing + Icon)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -70,6 +79,8 @@ jobs:
               <string>APPL</string>
               <key>CFBundleShortVersionString</key>
               <string>1.0</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
               <key>MinimumOSVersion</key>
               <string>15.0</string>
               <key>UIFileSharingEnabled</key>
@@ -85,10 +96,10 @@ jobs:
           EOF
 
           if [ -f "icon.png" ]; then cp icon.png Payload/Unleashed.app/icon.png; fi
-          zip -ry Sonic_Unleashed_Metal.ipa Payload
+          zip -ry Sonic_Unleashed_Final.ipa Payload
 
-      - name: Upload Artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Metal-IPA
-          path: Sonic_Unleashed_Metal.ipa
+          name: Unleashed-iPad9-IPA
+          path: Sonic_Unleashed_Final.ipa
