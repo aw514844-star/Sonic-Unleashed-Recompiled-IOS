@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (iPad 9 Optimized)
+name: Build Sonic Unleashed iOS (Fixed Freetype & Metal)
 
 on:
   push:
@@ -15,11 +15,14 @@ jobs:
           submodules: recursive
 
       - name: Install Dependencies
-        run: brew install cmake ninja pkg-config freetype curl fmt sdl2 sdl2_mixer sdl2_ttf
-
-      - name: Configure and Build (3GB RAM Optimization)
         run: |
-          # Added memory-related flags to help with iPad 9 constraints
+          brew install cmake ninja pkg-config freetype curl fmt sdl2 sdl2_mixer sdl2_ttf
+          # Export path so the system finds freetype headers easily
+          echo "FREETYPE_DIR=$(brew --prefix freetype)" >> $GITHUB_ENV
+
+      - name: Configure and Build
+        run: |
+          # Explicitly pointing CMake to the Freetype files it's missing
           cmake . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -29,34 +32,29 @@ jobs:
             -DGRAPHICS_API=Metal \
             -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
             -DCMAKE_CXX_FLAGS="-O3 -flto" \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix fmt);$(brew --prefix sdl2);$(brew --prefix sdl2_mixer);$(brew --prefix sdl2_ttf)"
+            -DFREETYPE_INCLUDE_DIRS=$(brew --prefix freetype)/include/freetype2 \
+            -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.dylib \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix fmt);$(brew --prefix sdl2);$(brew --prefix sdl2_mixer);$(brew --prefix sdl2_ttf);$(brew --prefix freetype)"
           
           cmake --build build --target UnleashedRecomp
 
-      - name: Create Optimized IPA
+      - name: Create Full IPA
         run: |
           mkdir -p Payload/Unleashed.app
+
+          # Locate and copy binary
           BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -perm +111 | head -n 1)
+          if [ -z "$BINARY_PATH" ]; then echo "Binary not found"; exit 1; fi
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # Copy assets to internal private folder
-          mkdir -p Payload/Unleashed.app/private
-          cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
+          # Package Assets from your specific folder
+          if [ -d "UnleashedRecompLib/private" ]; then
+            mkdir -p Payload/Unleashed.app/private
+            cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
+          fi
 
-          # Entitlements for 3GB RAM iPads (Critical for iPad 9)
-          cat <<EOF > Payload/Unleashed.app/archived-expanded-entitlements.xcent
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0">
-          <dict>
-              <key>com.apple.developer.kernel.increased-memory-limit</key>
-              <true/>
-          </dict>
-          </plist>
-          EOF
-
-          # Info.plist with File Sharing and Icon
+          # Info.plist for iPad 9 (File Sharing + Metal)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -80,15 +78,17 @@ jobs:
               <true/>
               <key>CFBundleIconFiles</key>
               <array><string>icon.png</string></array>
+              <key>com.apple.developer.kernel.increased-memory-limit</key>
+              <true/>
           </dict>
           </plist>
           EOF
 
           if [ -f "icon.png" ]; then cp icon.png Payload/Unleashed.app/icon.png; fi
-          zip -ry Sonic_Unleashed_iPad9.ipa Payload
+          zip -ry Sonic_Unleashed_Metal.ipa Payload
 
-      - name: Upload IPA
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad9-IPA
-          path: Sonic_Unleashed_iPad9.ipa
+          name: Unleashed-Metal-IPA
+          path: Sonic_Unleashed_Metal.ipa
