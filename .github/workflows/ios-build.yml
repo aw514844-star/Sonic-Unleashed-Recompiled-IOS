@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (100% Success)
+name: Build Sonic Unleashed iOS (Metal + Assets + Icon)
 
 on:
   push:
@@ -16,23 +16,25 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # Core build tools and required engine libraries
           brew install cmake ninja pkg-config freetype curl fmt sdl2 sdl2_mixer sdl2_ttf
-          
-          # Force export of brew paths for the compiler
-          echo "CURL_DIR=$(brew --prefix curl)" >> $GITHUB_ENV
-          echo "FREETYPE_DIR=$(brew --prefix freetype)" >> $GITHUB_ENV
-          echo "FMT_DIR=$(brew --prefix fmt)" >> $GITHUB_ENV
+
+      - name: Verify Assets
+        run: |
+          if [ ! -f "UnleashedRecompLib/private/default.xex" ]; then
+            echo "::error::Assets missing! Ensure default.xex is in UnleashedRecompLib/private/"
+            exit 1
+          fi
 
       - name: Configure and Build
         run: |
-          # 1. Point directly to Homebrew libraries to fix all missing package errors
-          # 2. Disable internal code signing so CMake doesn't ask for a Team ID
+          # Targeting Metal and arm64 for iPad performance
           cmake . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DENABLE_METAL=ON \
+            -DGRAPHICS_API=Metal \
             -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
             -DCMAKE_PREFIX_PATH="$(brew --prefix fmt);$(brew --prefix sdl2);$(brew --prefix sdl2_mixer);$(brew --prefix sdl2_ttf)" \
             -DCURL_LIBRARY=$(brew --prefix curl)/lib/libcurl.dylib \
@@ -42,25 +44,25 @@ jobs:
           
           cmake --build build --target UnleashedRecomp
 
-      - name: Create Validated IPA
+      - name: Create Full IPA
         run: |
           mkdir -p Payload/Unleashed.app
 
-          # Capture the ~26MB engine binary
-          BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -size +10M | head -n 1)
-          if [ -z "$BINARY_PATH" ]; then BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f | head -n 1); fi
-          
+          # Find the engine binary and move it to the app folder
+          BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -perm +111 | head -n 1)
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # Icon handling from the root folder (icon.png)
+          # Copy your private assets (default.xex, shader.ar) into the bundle
+          mkdir -p Payload/Unleashed.app/private
+          cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
+
+          # Apply the Icon
           if [ -f "icon.png" ]; then
-            cp icon.png Payload/Unleashed.app/AppIcon.png
-          else
-            touch Payload/Unleashed.app/AppIcon.png
+            cp icon.png Payload/Unleashed.app/icon.png
           fi
 
-          # Strictly valid Info.plist with File Sharing enabled
+          # Plist with Metal, File Sharing, and Icon support
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -72,10 +74,6 @@ jobs:
               <string>com.unleashed.recomp</string>
               <key>CFBundleName</key>
               <string>Unleashed</string>
-              <key>CFBundleDisplayName</key>
-              <string>Sonic Unleashed</string>
-              <key>CFBundleIconFile</key>
-              <string>AppIcon.png</string>
               <key>CFBundlePackageType</key>
               <string>APPL</string>
               <key>CFBundleShortVersionString</key>
@@ -90,17 +88,18 @@ jobs:
               <true/>
               <key>LSSupportsOpeningDocumentsInPlace</key>
               <true/>
+              <key>CFBundleIconFiles</key>
+              <array><string>icon.png</string></array>
               <key>UIDeviceFamily</key>
               <array><integer>1</integer><integer>2</integer></array>
           </dict>
           </plist>
           EOF
 
-          echo -n "APPL????" > Payload/Unleashed.app/PkgInfo
-          zip -ry Sonic_Unleashed_Full.ipa Payload
+          zip -ry Sonic_Unleashed_Metal.ipa Payload
 
-      - name: Upload Artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Final-IPA
-          path: Sonic_Unleashed_Full.ipa
+          name: Unleashed-Metal-IPA
+          path: Sonic_Unleashed_Metal.ipa
