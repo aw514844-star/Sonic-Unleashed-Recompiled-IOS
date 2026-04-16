@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (Emergency Final Fix)
+name: Build Sonic Unleashed iOS (Ironclad Final)
 
 on:
   push:
@@ -20,16 +20,15 @@ jobs:
       - name: Setup vcpkg (Full History Fix)
         run: |
           rm -rf vcpkg
-          # REMOVED --depth 1 to fix the 'baseline.json' git error
+          # Fixed: Full repository path used to prevent Error 128
           git clone https://github.com vcpkg
           ./vcpkg/bootstrap-vcpkg.sh
-          # DELETE vcpkg.json if it exists to prevent Manifest Mode conflicts
+          # Prevents Manifest Mode conflicts
           rm -f vcpkg.json
           ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios
 
-      - name: Configure and Build (Metal Optimized)
+      - name: Configure and Build (Metal + iPad 9)
         run: |
-          # Explicitly point to Ninja to fix 'CMAKE_MAKE_PROGRAM not set'
           cmake . -B build -G Ninja \
             -DCMAKE_MAKE_PROGRAM=$(which ninja) \
             -DCMAKE_TOOLCHAIN_FILE=$(pwd)/vcpkg/scripts/buildsystems/vcpkg.cmake \
@@ -45,36 +44,47 @@ jobs:
           
           cmake --build build --target UnleashedRecomp
 
-      - name: Validate and Package IPA
+      - name: Create Validated IPA
         run: |
           mkdir -p Payload/Unleashed.app/private
-          BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -perm +111 | head -n 1)
-          if [ -z "$BINARY_PATH" ]; then exit 1; fi
+          
+          # MacOS-compatible binary search
+          BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f | head -n 1)
+          if [ -z "$BINARY_PATH" ]; then echo "Binary not found"; exit 1; fi
+          
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
+
+          # Sync game files
           if [ -d "UnleashedRecompLib/private" ]; then
             cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
           fi
+
+          # Corrected Info.plist (Exact Apple DTD + Mandatory Keys)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0"><dict>
+          <plist version="1.0">
+          <dict>
               <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
               <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
               <key>CFBundleName</key><string>Unleashed</string>
               <key>CFBundlePackageType</key><string>APPL</string>
               <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>CFBundleVersion</key><string>1</string>
               <key>LSRequiresIPhoneOS</key><true/>
               <key>MinimumOSVersion</key><string>15.0</string>
               <key>UIFileSharingEnabled</key><true/>
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
               <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
-          </dict></plist>
+          </dict>
+          </plist>
           EOF
+
           zip -0ry Sonic_Unleashed_iPad9.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-IPA
+          name: Sonic-Unleashed-Final-IPA
           path: Sonic_Unleashed_iPad9.ipa
