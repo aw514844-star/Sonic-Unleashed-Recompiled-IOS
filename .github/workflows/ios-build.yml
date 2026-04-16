@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (Ironclad Direct Source)
+name: Build Sonic Unleashed iOS (Ironclad Manifest Fix)
 
 on:
   push:
@@ -17,20 +17,17 @@ jobs:
       - name: Install Build Tools
         run: brew install cmake ninja pkg-config
 
-      - name: Setup vcpkg (Official Source)
+      - name: Setup vcpkg (Classic Mode Force)
         run: |
           rm -rf vcpkg
-          # The direct, official source URL to prevent 128 cloning errors
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
+          git clone --depth 1 https://github.com vcpkg
           ./vcpkg/bootstrap-vcpkg.sh
-          # Ensure private folder exists for bundling
           mkdir -p UnleashedRecompLib/private
-          # Build libraries specifically for iOS arm64 devices
-          ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios
+          # FIX: Added --classic to bypass the manifest mode error
+          ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios --classic
 
-      - name: Configure and Build (Metal + iPad 9)
+      - name: Configure and Build (Metal Optimized)
         run: |
-          # Use absolute path for toolchain to ensure pathing reliability
           cmake . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$(pwd)/vcpkg/scripts/buildsystems/vcpkg.cmake \
             -DVCPKG_TARGET_TRIPLET=arm64-ios \
@@ -51,26 +48,22 @@ jobs:
         run: |
           mkdir -p Payload/Unleashed.app/private
 
-          # Search for the engine binary produced by the build
+          # Search for the engine binary
           BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -perm +111 | head -n 1)
           if [ -z "$BINARY_PATH" ]; then
-            echo "::error::BUILD FAILURE: The UnleashedRecomp engine was not created!"
+            echo "::error::BUILD FAILURE: The engine binary was not found!"
             exit 1
           fi
 
-          # Bundle the binary and set executable permissions
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # Inject default.xex, xexp, and shader.ar if present
+          # Bundle assets from private folder
           if [ -d "UnleashedRecompLib/private" ] && [ "$(ls -A UnleashedRecompLib/private)" ]; then
             cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
-            echo "Core game assets successfully bundled."
-          else
-            echo "::warning::Private folder is empty! IPA will be a shell only."
           fi
 
-          # Optimized Info.plist for iPad 9 (File Sharing + Memory Optimization)
+          # Info.plist for iPad 9 (File Sharing + Memory Optimization)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -87,25 +80,21 @@ jobs:
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
               <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
               <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
-              <key>CFBundleIconFiles</key><array><string>icon.png</string></array>
           </dict>
           </plist>
           EOF
 
           [ -f "icon.png" ] && cp icon.png Payload/Unleashed.app/icon.png
-
-          # Use -0 (no compression) for fast packaging of game assets
           zip -0ry Sonic_Unleashed_iPad9_Final.ipa Payload
           
-          # Final validation of IPA size
           IPA_SIZE=$(stat -f%z "Sonic_Unleashed_iPad9_Final.ipa")
           if [ "$IPA_SIZE" -lt 1000000 ]; then
-            echo "::error::CRITICAL: IPA is too small. Build is empty!"
+            echo "::error::CRITICAL: IPA is too small. Build failed!"
             exit 1
           fi
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad9-Official-IPA
+          name: Sonic-Unleashed-iPad9-Final
           path: Sonic_Unleashed_iPad9_Final.ipa
