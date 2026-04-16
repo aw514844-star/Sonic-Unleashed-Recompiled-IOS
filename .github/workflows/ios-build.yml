@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (Ironclad Manifest Fix)
+name: Build Sonic Unleashed iOS (Total Ironclad Fix)
 
 on:
   push:
@@ -17,16 +17,19 @@ jobs:
       - name: Install Build Tools
         run: brew install cmake ninja pkg-config
 
-      - name: Setup vcpkg (Classic Mode Force)
+      - name: Setup vcpkg (Full URL & Classic Mode Fix)
         run: |
+          # 1. Permanent Fix for Git Error 128
           rm -rf vcpkg
-          git clone --depth 1 https://github.com vcpkg
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
           ./vcpkg/bootstrap-vcpkg.sh
+          
+          # 2. Permanent Fix for Manifest Mode Error (Exit Code 1)
+          # We use --classic to ignore any vcpkg.json in your repo
           mkdir -p UnleashedRecompLib/private
-          # FIX: Added --classic to bypass the manifest mode error
           ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios --classic
 
-      - name: Configure and Build (Metal Optimized)
+      - name: Configure and Build (Metal + iPad 9)
         run: |
           cmake . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$(pwd)/vcpkg/scripts/buildsystems/vcpkg.cmake \
@@ -44,26 +47,27 @@ jobs:
           
           cmake --build build --target UnleashedRecomp
 
-      - name: Validate and Package IPA (Validated Binary)
+      - name: Validate and Package IPA (No-Empty-IPA Guard)
         run: |
           mkdir -p Payload/Unleashed.app/private
 
-          # Search for the engine binary
+          # Discovery logic: find binary even if hidden in subfolders
           BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -perm +111 | head -n 1)
           if [ -z "$BINARY_PATH" ]; then
-            echo "::error::BUILD FAILURE: The engine binary was not found!"
+            echo "::error::BUILD FAILURE: The engine binary was not produced!"
             exit 1
           fi
 
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # Bundle assets from private folder
+          # Inject default.xex, xexp, shader.ar
           if [ -d "UnleashedRecompLib/private" ] && [ "$(ls -A UnleashedRecompLib/private)" ]; then
             cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
+            echo "Core assets successfully injected into IPA."
           fi
 
-          # Info.plist for iPad 9 (File Sharing + Memory Optimization)
+          # Info.plist: iPad 9 File Sharing & Memory Optimizations
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -80,6 +84,7 @@ jobs:
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
               <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
               <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
+              <key>CFBundleIconFiles</key><array><string>icon.png</string></array>
           </dict>
           </plist>
           EOF
@@ -89,7 +94,7 @@ jobs:
           
           IPA_SIZE=$(stat -f%z "Sonic_Unleashed_iPad9_Final.ipa")
           if [ "$IPA_SIZE" -lt 1000000 ]; then
-            echo "::error::CRITICAL: IPA is too small. Build failed!"
+            echo "::error::CRITICAL: IPA is too small. Build is empty!"
             exit 1
           fi
 
