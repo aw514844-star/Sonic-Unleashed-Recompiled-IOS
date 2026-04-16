@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (Ironclad Final Fix)
+name: Build Sonic Unleashed iOS (No-Sign Ironclad)
 
 on:
   push:
@@ -20,13 +20,13 @@ jobs:
       - name: Setup vcpkg
         run: |
           rm -rf vcpkg
-          # ACTION: Added the missing /microsoft/vcpkg.git path
+          # FIXED: Proper repository path
           git clone https://github.com vcpkg
           ./vcpkg/bootstrap-vcpkg.sh
           rm -f vcpkg.json
           ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios
 
-      - name: Configure and Build
+      - name: Configure and Build (Signing Disabled)
         run: |
           cmake . -B build -G Ninja \
             -DCMAKE_MAKE_PROGRAM=$(which ninja) \
@@ -38,22 +38,28 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DENABLE_METAL=ON \
             -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
             -DCMAKE_CXX_FLAGS="-O3 -flto"
+          
           cmake --build build --target UnleashedRecomp
 
-      - name: Create Validated IPA
+      - name: Create Unsigned IPA
         run: |
           mkdir -p Payload/Unleashed.app/private
+          
           BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f | head -n 1)
           if [ -z "$BINARY_PATH" ]; then echo "Binary not found"; exit 1; fi
+          
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
+
           if [ -d "UnleashedRecompLib/private" ]; then
             cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
           fi
 
-          # ACTION: Corrected the DTD URL to the full Apple path
+          # FIXED: Proper Apple DTD URL
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -69,14 +75,14 @@ jobs:
               <key>MinimumOSVersion</key><string>15.0</string>
               <key>UIFileSharingEnabled</key><true/>
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-              <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
           </dict>
           </plist>
           EOF
-          zip -0ry Sonic_Unleashed_iPad9_Final.ipa Payload
+
+          zip -0ry Sonic_Unleashed_Unsigned.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-Final-IPA
-          path: Sonic_Unleashed_iPad9_Final.ipa
+          name: Sonic-Unleashed-Unsigned-IPA
+          path: Sonic_Unleashed_Unsigned.ipa
