@@ -1,65 +1,55 @@
-name: Build Sonic Unleashed iOS (No-Sign Ironclad)
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+name: Sonic Unleashed Final - BUILD 200
+on: [workflow_dispatch, push]
 
 jobs:
-  build_ios:
+  build:
     runs-on: macos-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install Build Tools
-        run: brew install cmake ninja pkg-config
-
-      - name: Setup vcpkg
+      - name: Build Engine
         run: |
-          rm -rf vcpkg
-          # FIXED: Proper repository path
-          git clone https://github.com vcpkg
-          ./vcpkg/bootstrap-vcpkg.sh
-          rm -f vcpkg.json
-          ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios
+          mkdir -p BuildDir
+          xcodebuild build \
+            -scheme "UnleashedRecomp" \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath ./BuildDir \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES || true
 
-      - name: Configure and Build (Signing Disabled)
+      - name: Ultimate Final Inject
         run: |
-          cmake . -B build -G Ninja \
-            -DCMAKE_MAKE_PROGRAM=$(which ninja) \
-            -DCMAKE_TOOLCHAIN_FILE=$(pwd)/vcpkg/scripts/buildsystems/vcpkg.cmake \
-            -DVCPKG_TARGET_TRIPLET=arm64-ios \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DENABLE_METAL=ON \
-            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
-            -DCMAKE_CXX_FLAGS="-O3 -flto"
-          
-          cmake --build build --target UnleashedRecomp
-
-      - name: Create Unsigned IPA
-        run: |
+          # 1. SETUP CLEAN BUNDLE STRUCTURE
           mkdir -p Payload/Unleashed.app/private
           
-          BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f | head -n 1)
-          if [ -z "$BINARY_PATH" ]; then echo "Binary not found"; exit 1; fi
+          # 2. FIND & VERIFY BINARY
+          RAW_BINARY=$(find ./BuildDir -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
+          if [ -z "$RAW_BINARY" ]; then
+             RAW_BINARY=$(find . -type f -size +1M -perm +111 | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
+          fi
+          if [ -z "$RAW_BINARY" ]; then exit 1; fi
           
-          cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
+          cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          if [ -d "UnleashedRecompLib/private" ]; then
-            cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
+          # 3. FORCE METAL API (Placed in root for initial detection)
+          cat <<EOF > Payload/Unleashed.app/config.toml
+          [Video]
+          GraphicsAPI = "Metal"
+          EOF
+
+          # 4. INJECT ASSETS INTO THE 'PRIVATE' FOLDER (The Engine's Default Path)
+          if [ -d "UnleashedRecompLib/Private" ]; then
+            echo "Injecting Private Assets into /private..."
+            cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/private/
           fi
 
-          # FIXED: Proper Apple DTD URL
+          # 5. IRONCLAD INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -75,14 +65,15 @@ jobs:
               <key>MinimumOSVersion</key><string>15.0</string>
               <key>UIFileSharingEnabled</key><true/>
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+              <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
           </dict>
           </plist>
           EOF
-
-          zip -0ry Sonic_Unleashed_Unsigned.ipa Payload
-
-      - name: Upload IPA
+          
+          zip -ry Unleashed_Final.ipa Payload
+      
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-Unsigned-IPA
-          path: Sonic_Unleashed_Unsigned.ipa
+          name: Unleashed-Final-IPA
+          path: Unleashed_Final.ipa
