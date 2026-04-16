@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (Permanent Ironclad Fix)
+name: Build Sonic Unleashed iOS (Ironclad Direct Source)
 
 on:
   push:
@@ -17,17 +17,20 @@ jobs:
       - name: Install Build Tools
         run: brew install cmake ninja pkg-config
 
-      - name: Setup vcpkg (Full Permanent URL)
+      - name: Setup vcpkg (Official Source)
         run: |
           rm -rf vcpkg
-          # The full URL is mandatory to prevent Error 128
-          git clone --depth 1 https://github.com vcpkg
+          # The direct, official source URL to prevent 128 cloning errors
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
           ./vcpkg/bootstrap-vcpkg.sh
-          # Build core libraries specifically for physical iOS devices (arm64)
+          # Ensure private folder exists for bundling
+          mkdir -p UnleashedRecompLib/private
+          # Build libraries specifically for iOS arm64 devices
           ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios
 
       - name: Configure and Build (Metal + iPad 9)
         run: |
+          # Use absolute path for toolchain to ensure pathing reliability
           cmake . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$(pwd)/vcpkg/scripts/buildsystems/vcpkg.cmake \
             -DVCPKG_TARGET_TRIPLET=arm64-ios \
@@ -44,27 +47,30 @@ jobs:
           
           cmake --build build --target UnleashedRecomp
 
-      - name: Validate and Package IPA (No-Empty-IPA Guard)
+      - name: Validate and Package IPA (Validated Binary)
         run: |
           mkdir -p Payload/Unleashed.app/private
 
-          # Binary Discovery: Ensures the engine actually compiled
+          # Search for the engine binary produced by the build
           BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -perm +111 | head -n 1)
           if [ -z "$BINARY_PATH" ]; then
-            echo "::error::BUILD FAILURE: The engine binary was not found!"
+            echo "::error::BUILD FAILURE: The UnleashedRecomp engine was not created!"
             exit 1
           fi
 
-          # Asset Sync: default.xex, default.xexp, shader.ar
+          # Bundle the binary and set executable permissions
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
+          # Inject default.xex, xexp, and shader.ar if present
           if [ -d "UnleashedRecompLib/private" ] && [ "$(ls -A UnleashedRecompLib/private)" ]; then
             cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
-            echo "Core assets successfully bundled into IPA."
+            echo "Core game assets successfully bundled."
+          else
+            echo "::warning::Private folder is empty! IPA will be a shell only."
           fi
 
-          # Info.plist: iPad 9 File Sharing & Memory Optimizations
+          # Optimized Info.plist for iPad 9 (File Sharing + Memory Optimization)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -86,17 +92,20 @@ jobs:
           </plist>
           EOF
 
-          # Final verification and zero-compression packaging
+          [ -f "icon.png" ] && cp icon.png Payload/Unleashed.app/icon.png
+
+          # Use -0 (no compression) for fast packaging of game assets
           zip -0ry Sonic_Unleashed_iPad9_Final.ipa Payload
           
+          # Final validation of IPA size
           IPA_SIZE=$(stat -f%z "Sonic_Unleashed_iPad9_Final.ipa")
           if [ "$IPA_SIZE" -lt 1000000 ]; then
-            echo "::error::CRITICAL: IPA is too small. Build is likely empty!"
+            echo "::error::CRITICAL: IPA is too small. Build is empty!"
             exit 1
           fi
 
-      - name: Upload Finished IPA
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad9-Final
+          name: Unleashed-iPad9-Official-IPA
           path: Sonic_Unleashed_iPad9_Final.ipa
