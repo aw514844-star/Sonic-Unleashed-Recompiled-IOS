@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (vcpkg Corrected)
+name: Build Sonic Unleashed iOS (Total Fix)
 
 on:
   push:
@@ -17,17 +17,21 @@ jobs:
       - name: Install Build Tools
         run: brew install cmake ninja pkg-config
 
-      - name: Setup vcpkg (Fixed Repository URL)
+      - name: Setup vcpkg (Clean & Correct URL)
         run: |
+          # 1. Wipe any existing folder to prevent "destination path already exists"
           rm -rf vcpkg
-          # Using the full repo path so it actually clones
+          
+          # 2. FIX: Use the full Microsoft repository URL
           git clone --depth 1 https://github.com
+          
+          # 3. Bootstrap and install REAL iOS libraries
           ./vcpkg/bootstrap-vcpkg.sh
-          # Compile the arm64-ios versions of your dependencies
           ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios
 
-      - name: Configure and Build (Metal + iPad 9)
+      - name: Configure and Build (Metal + iPad 9 Optimized)
         run: |
+          # Use the vcpkg toolchain to solve the "macOS vs iOS" architecture brick wall
           cmake . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake \
             -DVCPKG_TARGET_TRIPLET=arm64-ios \
@@ -43,7 +47,7 @@ jobs:
 
           cmake --build build --target UnleashedRecomp
 
-      - name: Create Full IPA (No Signing)
+      - name: Create Full IPA (Metal + Assets + No Signing)
         run: |
           mkdir -p Payload/Unleashed.app
 
@@ -57,13 +61,14 @@ jobs:
             cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           fi
 
-          # PACK ASSETS: Move your private folder into the app
+          # Map your lowercase assets from UnleashedRecompLib/private
           if [ -d "UnleashedRecompLib/private" ]; then
+            echo "Injecting game assets..."
             mkdir -p Payload/Unleashed.app/private
             cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
           fi
 
-          # Valid Info.plist for iPad 9 (File Sharing + Memory Limit)
+          # Info.plist: iPad 9 RAM fix + File Sharing + Icon
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -75,23 +80,34 @@ jobs:
               <string>com.unleashed.recomp</string>
               <key>CFBundleName</key>
               <string>Unleashed</string>
-              <key>CFBundlePackageType</key>              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>       <string>1.0</string>
-              <key>LSRequiresIPhoneOS</key>               <true/>
-              <key>MinimumOSVersion</key>                 <string>15.0</string>
-              <key>UIFileSharingEnabled</key>             <true/>
-              <key>LSSupportsOpeningDocumentsInPlace</key> <true/>
-              <key>CFBundleIconFiles</key>                <array><string>icon.png</string></array>
-              <key>com.apple.developer.kernel.increased-memory-limit</key> <true/>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>MinimumOSVersion</key>
+              <string>15.0</string>
+              <key>UIFileSharingEnabled</key>
+              <true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key>
+              <true/>
+              <key>CFBundleIconFiles</key>
+              <array><string>icon.png</string></array>
+              <key>com.apple.developer.kernel.increased-memory-limit</key>
+              <true/>
           </dict>
           </plist>
           EOF
 
+          # Copy Icon if it exists
           if [ -f "icon.png" ]; then cp icon.png Payload/Unleashed.app/icon.png; fi
-          zip -ry Sonic_Unleashed_Metal.ipa Payload
+          
+          # Zip into Final IPA
+          zip -ry Sonic_Unleashed_Metal_iPad9.ipa Payload
 
-      - name: Upload IPA
+      - name: Upload Final Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad9-IPA
-          path: Sonic_Unleashed_Metal.ipa
+          name: Unleashed-iPad9-Fixed
+          path: Sonic_Unleashed_Metal_iPad9.ipa
