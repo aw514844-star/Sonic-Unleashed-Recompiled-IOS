@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (Final Fixed URL)
+name: Build Sonic Unleashed iOS (vcpkg Corrected)
 
 on:
   push:
@@ -17,16 +17,16 @@ jobs:
       - name: Install Build Tools
         run: brew install cmake ninja pkg-config
 
-      - name: Setup vcpkg (Clean Install + Correct URL)
+      - name: Setup vcpkg (Fixed Repository URL)
         run: |
           rm -rf vcpkg
-          # Fixed the URL below
+          # Using the full repo path so it actually clones
           git clone --depth 1 https://github.com
           ./vcpkg/bootstrap-vcpkg.sh
-          # Install true iOS-arm64 versions
+          # Compile the arm64-ios versions of your dependencies
           ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios
 
-      - name: Configure and Build (Metal Optimized)
+      - name: Configure and Build (Metal + iPad 9)
         run: |
           cmake . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake \
@@ -34,7 +34,6 @@ jobs:
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_BUILD_TYPE=Release \
             -DENABLE_METAL=ON \
             -DGRAPHICS_API=Metal \
             -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
@@ -44,11 +43,11 @@ jobs:
 
           cmake --build build --target UnleashedRecomp
 
-      - name: Create Validated IPA
+      - name: Create Full IPA (No Signing)
         run: |
           mkdir -p Payload/Unleashed.app
 
-          # Find bundle or binary
+          # Find the app bundle or binary
           APP_PATH=$(find ./build -name "*.app" -type d | head -n 1)
           if [ -n "$APP_PATH" ]; then
             cp -R "$APP_PATH/." Payload/Unleashed.app/
@@ -58,13 +57,13 @@ jobs:
             cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           fi
 
-          # Bundle your private assets
+          # PACK ASSETS: Move your private folder into the app
           if [ -d "UnleashedRecompLib/private" ]; then
             mkdir -p Payload/Unleashed.app/private
             cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
           fi
 
-          # Info.plist for iPad 9 (File Sharing + Metal)
+          # Valid Info.plist for iPad 9 (File Sharing + Memory Limit)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -76,31 +75,23 @@ jobs:
               <string>com.unleashed.recomp</string>
               <key>CFBundleName</key>
               <string>Unleashed</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
-              <key>LSRequiresIPhoneOS</key>
-              <true/>
-              <key>MinimumOSVersion</key>
-              <string>15.0</string>
-              <key>UIFileSharingEnabled</key>
-              <true/>
-              <key>LSSupportsOpeningDocumentsInPlace</key>
-              <true/>
-              <key>CFBundleIconFiles</key>
-              <array><string>icon.png</string></array>
-              <key>com.apple.developer.kernel.increased-memory-limit</key>
-              <true/>
+              <key>CFBundlePackageType</key>              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>       <string>1.0</string>
+              <key>LSRequiresIPhoneOS</key>               <true/>
+              <key>MinimumOSVersion</key>                 <string>15.0</string>
+              <key>UIFileSharingEnabled</key>             <true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key> <true/>
+              <key>CFBundleIconFiles</key>                <array><string>icon.png</string></array>
+              <key>com.apple.developer.kernel.increased-memory-limit</key> <true/>
           </dict>
           </plist>
           EOF
 
           if [ -f "icon.png" ]; then cp icon.png Payload/Unleashed.app/icon.png; fi
-          zip -ry Sonic_Unleashed_Final.ipa Payload
+          zip -ry Sonic_Unleashed_Metal.ipa Payload
 
-      - name: Upload Artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad9-Fixed
-          path: Sonic_Unleashed_Final.ipa
+          name: Unleashed-iPad9-IPA
+          path: Sonic_Unleashed_Metal.ipa
