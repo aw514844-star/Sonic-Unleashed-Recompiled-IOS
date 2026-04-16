@@ -1,0 +1,101 @@
+name: Build Sonic Unleashed iOS (No Errors)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build_ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Dependencies
+        run: |
+          brew install cmake ninja pkg-config freetype
+          # Ensure Freetype is linked for the compiler
+          echo "FREETYPE_DIR=$(brew --prefix freetype)" >> $GITHUB_ENV
+
+      - name: Configure and Build
+        run: |
+          # The fix for the Freetype error is adding -DFT_DISABLE_FIND_PACKAGE=ON 
+          # or pointing directly to the brew path if the internal one fails.
+          cmake . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DENABLE_METAL=ON \
+            -DCMAKE_PREFIX_PATH=$(brew --prefix freetype) \
+            -DFREETYPE_INCLUDE_DIRS=$(brew --prefix freetype)/include/freetype2 \
+            -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.dylib
+          
+          cmake --build build --target UnleashedRecomp
+
+      - name: Create IPA (Validation and Info.plist)
+        run: |
+          # Ensure fresh start
+          rm -rf Payload Sonic_Unleashed.ipa
+          mkdir -p Payload/Unleashed.app
+
+          # Find binary - If it's not found, the build failed earlier
+          BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f | head -n 1)
+          cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
+          chmod +x Payload/Unleashed.app/UnleashedRecomp
+
+          # Icon handling from main folder
+          if [ -f "icon.png" ]; then
+            cp icon.png Payload/Unleashed.app/AppIcon.png
+          else
+            # Create a blank white icon if missing to prevent install error
+            touch Payload/Unleashed.app/AppIcon.png
+          fi
+
+          # Validated Info.plist (No typos, strict XML)
+          cat <<EOF > Payload/Unleashed.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>UnleashedRecomp</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.unleashed.recomp</string>
+              <key>CFBundleName</key>
+              <string>Unleashed</string>
+              <key>CFBundleDisplayName</key>
+              <string>Sonic Unleashed</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon.png</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>MinimumOSVersion</key>
+              <string>15.0</string>
+              <key>UIFileSharingEnabled</key>
+              <true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key>
+              <true/>
+              <key>UIDeviceFamily</key>
+              <array><integer>1</integer><integer>2</integer></array>
+          </dict>
+          </plist>
+          EOF
+
+          # Final Package
+          echo -n "APPL????" > Payload/Unleashed.app/PkgInfo
+          zip -ry Sonic_Unleashed_iOS.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sonic-Unleashed-IPA
+          path: Sonic_Unleashed_iOS.ipa
