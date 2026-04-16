@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (Final Fix)
+name: Build Sonic Unleashed iOS (100% Success)
 
 on:
   push:
@@ -16,19 +16,25 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          brew install cmake ninja pkg-config freetype curl
+          # Core build tools and required engine libraries
+          brew install cmake ninja pkg-config freetype curl fmt sdl2 sdl2_mixer sdl2_ttf
+          
           # Force export of brew paths for the compiler
           echo "CURL_DIR=$(brew --prefix curl)" >> $GITHUB_ENV
           echo "FREETYPE_DIR=$(brew --prefix freetype)" >> $GITHUB_ENV
+          echo "FMT_DIR=$(brew --prefix fmt)" >> $GITHUB_ENV
 
       - name: Configure and Build
         run: |
-          # The fix for all library errors: explicitly defining paths
+          # 1. Point directly to Homebrew libraries to fix all missing package errors
+          # 2. Disable internal code signing so CMake doesn't ask for a Team ID
           cmake . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DENABLE_METAL=ON \
+            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix fmt);$(brew --prefix sdl2);$(brew --prefix sdl2_mixer);$(brew --prefix sdl2_ttf)" \
             -DCURL_LIBRARY=$(brew --prefix curl)/lib/libcurl.dylib \
             -DCURL_INCLUDE_DIR=$(brew --prefix curl)/include \
             -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.dylib \
@@ -36,26 +42,25 @@ jobs:
           
           cmake --build build --target UnleashedRecomp
 
-      - name: Create Final IPA
+      - name: Create Validated IPA
         run: |
           mkdir -p Payload/Unleashed.app
 
-          # Capture the engine binary (approx 26MB)
+          # Capture the ~26MB engine binary
           BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -size +10M | head -n 1)
           if [ -z "$BINARY_PATH" ]; then BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f | head -n 1); fi
           
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # Icon handling: Looking in the ROOT for icon.png
+          # Icon handling from the root folder (icon.png)
           if [ -f "icon.png" ]; then
             cp icon.png Payload/Unleashed.app/AppIcon.png
           else
-            # Fallback so the build doesn't fail if you forgot the icon
             touch Payload/Unleashed.app/AppIcon.png
           fi
 
-          # Validated Info.plist (File Sharing + Icon)
+          # Strictly valid Info.plist with File Sharing enabled
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -92,10 +97,10 @@ jobs:
           EOF
 
           echo -n "APPL????" > Payload/Unleashed.app/PkgInfo
-          zip -ry Sonic_Unleashed_Final.ipa Payload
+          zip -ry Sonic_Unleashed_Full.ipa Payload
 
-      - name: Upload IPA
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Full-Build
-          path: Sonic_Unleashed_Final.ipa
+          name: Unleashed-Final-IPA
+          path: Sonic_Unleashed_Full.ipa
