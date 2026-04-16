@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (vcpkg Final Fix)
+name: Build Sonic Unleashed iOS (Final Fixed Script)
 
 on:
   push:
@@ -17,15 +17,16 @@ jobs:
       - name: Install Build Tools
         run: brew install cmake ninja pkg-config
 
-      - name: Setup vcpkg (iOS arm64)
+      - name: Setup vcpkg (Clean Install)
         run: |
-          # Clone into the root of the runner workspace
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git
+          # Kill existing folder to avoid "exit code 128"
+          rm -rf vcpkg
+          git clone --depth 1 https://github.com
           ./vcpkg/bootstrap-vcpkg.sh
-          # Use the verified arm64-ios community triplet for physical iPads
+          # Install true iOS-arm64 versions of libraries
           ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios
 
-      - name: Configure and Build
+      - name: Configure and Build (Metal + iPad 9 Optimized)
         run: |
           cmake . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake \
@@ -47,7 +48,7 @@ jobs:
         run: |
           mkdir -p Payload/Unleashed.app
 
-          # Check for bundle or raw binary
+          # Extract bundle metadata if available, otherwise grab binary
           APP_PATH=$(find ./build -name "*.app" -type d | head -n 1)
           if [ -n "$APP_PATH" ]; then
             cp -R "$APP_PATH/." Payload/Unleashed.app/
@@ -57,13 +58,13 @@ jobs:
             cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           fi
 
-          # Essential Assets
+          # Bundle Assets (default.xex, shader.ar) from your specific folder
           if [ -d "UnleashedRecompLib/private" ]; then
             mkdir -p Payload/Unleashed.app/private
             cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
           fi
 
-          # Info.plist (Metal + File Sharing + Icon)
+          # Valid Info.plist for iPad 9 (File Sharing + Metal)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -98,8 +99,8 @@ jobs:
           if [ -f "icon.png" ]; then cp icon.png Payload/Unleashed.app/icon.png; fi
           zip -ry Sonic_Unleashed_Final.ipa Payload
 
-      - name: Upload IPA
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad9-IPA
+          name: Unleashed-iPad9-Fixed
           path: Sonic_Unleashed_Final.ipa
