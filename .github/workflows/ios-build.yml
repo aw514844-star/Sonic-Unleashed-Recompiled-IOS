@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (Metal + Assets + Icon)
+name: Build Sonic Unleashed iOS (iPad 9 Optimized)
 
 on:
   push:
@@ -15,19 +15,11 @@ jobs:
           submodules: recursive
 
       - name: Install Dependencies
-        run: |
-          brew install cmake ninja pkg-config freetype curl fmt sdl2 sdl2_mixer sdl2_ttf
+        run: brew install cmake ninja pkg-config freetype curl fmt sdl2 sdl2_mixer sdl2_ttf
 
-      - name: Verify Assets
+      - name: Configure and Build (3GB RAM Optimization)
         run: |
-          if [ ! -f "UnleashedRecompLib/private/default.xex" ]; then
-            echo "::error::Assets missing! Ensure default.xex is in UnleashedRecompLib/private/"
-            exit 1
-          fi
-
-      - name: Configure and Build
-        run: |
-          # Targeting Metal and arm64 for iPad performance
+          # Added memory-related flags to help with iPad 9 constraints
           cmake . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -36,33 +28,35 @@ jobs:
             -DENABLE_METAL=ON \
             -DGRAPHICS_API=Metal \
             -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix fmt);$(brew --prefix sdl2);$(brew --prefix sdl2_mixer);$(brew --prefix sdl2_ttf)" \
-            -DCURL_LIBRARY=$(brew --prefix curl)/lib/libcurl.dylib \
-            -DCURL_INCLUDE_DIR=$(brew --prefix curl)/include \
-            -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.dylib \
-            -DFREETYPE_INCLUDE_DIRS=$(brew --prefix freetype)/include/freetype2
+            -DCMAKE_CXX_FLAGS="-O3 -flto" \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix fmt);$(brew --prefix sdl2);$(brew --prefix sdl2_mixer);$(brew --prefix sdl2_ttf)"
           
           cmake --build build --target UnleashedRecomp
 
-      - name: Create Full IPA
+      - name: Create Optimized IPA
         run: |
           mkdir -p Payload/Unleashed.app
-
-          # Find the engine binary and move it to the app folder
           BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -perm +111 | head -n 1)
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # Copy your private assets (default.xex, shader.ar) into the bundle
+          # Copy assets to internal private folder
           mkdir -p Payload/Unleashed.app/private
           cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
 
-          # Apply the Icon
-          if [ -f "icon.png" ]; then
-            cp icon.png Payload/Unleashed.app/icon.png
-          fi
+          # Entitlements for 3GB RAM iPads (Critical for iPad 9)
+          cat <<EOF > Payload/Unleashed.app/archived-expanded-entitlements.xcent
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+          <plist version="1.0">
+          <dict>
+              <key>com.apple.developer.kernel.increased-memory-limit</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
 
-          # Plist with Metal, File Sharing, and Icon support
+          # Info.plist with File Sharing and Icon
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -78,10 +72,6 @@ jobs:
               <string>APPL</string>
               <key>CFBundleShortVersionString</key>
               <string>1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>LSRequiresIPhoneOS</key>
-              <true/>
               <key>MinimumOSVersion</key>
               <string>15.0</string>
               <key>UIFileSharingEnabled</key>
@@ -90,16 +80,15 @@ jobs:
               <true/>
               <key>CFBundleIconFiles</key>
               <array><string>icon.png</string></array>
-              <key>UIDeviceFamily</key>
-              <array><integer>1</integer><integer>2</integer></array>
           </dict>
           </plist>
           EOF
 
-          zip -ry Sonic_Unleashed_Metal.ipa Payload
+          if [ -f "icon.png" ]; then cp icon.png Payload/Unleashed.app/icon.png; fi
+          zip -ry Sonic_Unleashed_iPad9.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Metal-IPA
-          path: Sonic_Unleashed_Metal.ipa
+          name: Unleashed-iPad9-IPA
+          path: Sonic_Unleashed_iPad9.ipa
