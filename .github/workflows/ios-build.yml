@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (Ironclad Final Edition)
+name: Build Sonic Unleashed iOS (Final Permanent Fix)
 
 on:
   push:
@@ -17,18 +17,18 @@ jobs:
       - name: Install Build Tools
         run: brew install cmake ninja pkg-config
 
-      - name: Setup vcpkg (Fixed URL & iPad 9 Triplet)
+      - name: Setup vcpkg (Permanent URL Fix)
         run: |
           rm -rf vcpkg
+          # Fixed full URL to prevent git error 128
           git clone --depth 1 https://github.com vcpkg
           ./vcpkg/bootstrap-vcpkg.sh
-          # Ensure private folder exists even if repo is empty to prevent script crash
+          # Ensure private folder exists locally for the copy step later
           mkdir -p UnleashedRecompLib/private
           ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios
 
       - name: Configure and Build (Metal Optimized)
         run: |
-          # Use absolute path for toolchain to ensure zero pathing errors
           cmake . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$(pwd)/vcpkg/scripts/buildsystems/vcpkg.cmake \
             -DVCPKG_TARGET_TRIPLET=arm64-ios \
@@ -49,26 +49,26 @@ jobs:
         run: |
           mkdir -p Payload/Unleashed.app/private
 
-          # 1. FIND THE ENGINE BINARY
+          # 1. Binary Check - ensures binary exists before packaging
           BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -perm +111 | head -n 1)
           if [ -z "$BINARY_PATH" ]; then
             echo "::error::BUILD FAILURE: The UnleashedRecomp binary was not found!"
             exit 1
           fi
 
-          # 2. POPULATE THE APP BUNDLE
+          # 2. Populate Bundle
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
 
-          # 3. BUNDLE CORE ASSETS (default.xex, xexp, shader.ar)
+          # 3. Bundle Assets (default.xex, xexp, shader.ar)
           if [ -d "UnleashedRecompLib/private" ] && [ "$(ls -A UnleashedRecompLib/private)" ]; then
             cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
-            echo "Successfully bundled core assets from UnleashedRecompLib/private."
+            echo "Bundled core assets successfully."
           else
-            echo "::warning::Core assets folder is empty! IPA will be a shell only."
+            echo "::warning::Private folder is empty! Remember to add ISO data after install."
           fi
 
-          # 4. OPTIMIZED INFO.PLIST (iPad 9 RAM & File Sharing)
+          # 4. Info.plist Optimization (File Sharing + iPad 9 RAM Fix)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -92,18 +92,17 @@ jobs:
 
           [ -f "icon.png" ] && cp icon.png Payload/Unleashed.app/icon.png
 
-          # 5. FINAL SIZE & PACKAGING VALIDATION
+          # 5. Fast Packaging & Verification
           zip -0ry Sonic_Unleashed_iPad9_Final.ipa Payload
           
           IPA_SIZE=$(stat -f%z "Sonic_Unleashed_iPad9_Final.ipa")
           if [ "$IPA_SIZE" -lt 1000000 ]; then
-            echo "::error::CRITICAL: IPA is too small ($IPA_SIZE bytes). Build likely failed!"
+            echo "::error::CRITICAL: IPA is too small. Build failed!"
             exit 1
           fi
-          echo "IPA Created Successfully. Size: $IPA_SIZE bytes."
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-iPad9-IPA
+          name: Sonic-Unleashed-iPad9-Final
           path: Sonic_Unleashed_iPad9_Final.ipa
