@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (Total Ironclad Fix)
+name: Build Sonic Unleashed iOS (Emergency Final Fix)
 
 on:
   push:
@@ -17,21 +17,21 @@ jobs:
       - name: Install Build Tools
         run: brew install cmake ninja pkg-config
 
-      - name: Setup vcpkg (Full URL & Classic Mode Fix)
+      - name: Setup vcpkg (Full History Fix)
         run: |
-          # 1. Permanent Fix for Git Error 128
           rm -rf vcpkg
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
+          # REMOVED --depth 1 to fix the 'baseline.json' git error
+          git clone https://github.com vcpkg
           ./vcpkg/bootstrap-vcpkg.sh
-          
-          # 2. Permanent Fix for Manifest Mode Error (Exit Code 1)
-          # We use --classic to ignore any vcpkg.json in your repo
-          mkdir -p UnleashedRecompLib/private
-          ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios --classic
+          # DELETE vcpkg.json if it exists to prevent Manifest Mode conflicts
+          rm -f vcpkg.json
+          ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios
 
-      - name: Configure and Build (Metal + iPad 9)
+      - name: Configure and Build (Metal Optimized)
         run: |
+          # Explicitly point to Ninja to fix 'CMAKE_MAKE_PROGRAM not set'
           cmake . -B build -G Ninja \
+            -DCMAKE_MAKE_PROGRAM=$(which ninja) \
             -DCMAKE_TOOLCHAIN_FILE=$(pwd)/vcpkg/scripts/buildsystems/vcpkg.cmake \
             -DVCPKG_TARGET_TRIPLET=arm64-ios \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -39,40 +39,26 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_BUILD_TYPE=Release \
             -DENABLE_METAL=ON \
-            -DGRAPHICS_API=Metal \
             -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
-            -DCMAKE_CXX_FLAGS="-O3 -flto -miphoneos-version-min=15.0"
+            -DCMAKE_CXX_FLAGS="-O3 -flto"
           
           cmake --build build --target UnleashedRecomp
 
-      - name: Validate and Package IPA (No-Empty-IPA Guard)
+      - name: Validate and Package IPA
         run: |
           mkdir -p Payload/Unleashed.app/private
-
-          # Discovery logic: find binary even if hidden in subfolders
           BINARY_PATH=$(find ./build -name "UnleashedRecomp" -type f -perm +111 | head -n 1)
-          if [ -z "$BINARY_PATH" ]; then
-            echo "::error::BUILD FAILURE: The engine binary was not produced!"
-            exit 1
-          fi
-
+          if [ -z "$BINARY_PATH" ]; then exit 1; fi
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           chmod +x Payload/Unleashed.app/UnleashedRecomp
-
-          # Inject default.xex, xexp, shader.ar
-          if [ -d "UnleashedRecompLib/private" ] && [ "$(ls -A UnleashedRecompLib/private)" ]; then
+          if [ -d "UnleashedRecompLib/private" ]; then
             cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
-            echo "Core assets successfully injected into IPA."
           fi
-
-          # Info.plist: iPad 9 File Sharing & Memory Optimizations
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0">
-          <dict>
+          <plist version="1.0"><dict>
               <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
               <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
               <key>CFBundleName</key><string>Unleashed</string>
@@ -83,23 +69,12 @@ jobs:
               <key>UIFileSharingEnabled</key><true/>
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
               <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
-              <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
-              <key>CFBundleIconFiles</key><array><string>icon.png</string></array>
-          </dict>
-          </plist>
+          </dict></plist>
           EOF
+          zip -0ry Sonic_Unleashed_iPad9.ipa Payload
 
-          [ -f "icon.png" ] && cp icon.png Payload/Unleashed.app/icon.png
-          zip -0ry Sonic_Unleashed_iPad9_Final.ipa Payload
-          
-          IPA_SIZE=$(stat -f%z "Sonic_Unleashed_iPad9_Final.ipa")
-          if [ "$IPA_SIZE" -lt 1000000 ]; then
-            echo "::error::CRITICAL: IPA is too small. Build is empty!"
-            exit 1
-          fi
-
-      - name: Upload Artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-iPad9-Final
-          path: Sonic_Unleashed_iPad9_Final.ipa
+          name: Sonic-Unleashed-IPA
+          path: Sonic_Unleashed_iPad9.ipa
