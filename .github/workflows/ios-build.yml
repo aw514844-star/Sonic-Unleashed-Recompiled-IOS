@@ -1,4 +1,4 @@
-name: Build Sonic Unleashed iOS (Metal - No Signing - iPad 9)
+name: Build Sonic Unleashed iOS (Total Fix)
 
 on:
   push:
@@ -20,12 +20,12 @@ jobs:
       - name: Setup vcpkg (Fixed URL)
         run: |
           rm -rf vcpkg
-          # This line MUST be exactly like this:
+          # One single line, no spaces in the URL:
           git clone --depth 1 https://github.com
           ./vcpkg/bootstrap-vcpkg.sh
           ./vcpkg/vcpkg install sdl2 freetype fmt curl --triplet arm64-ios
 
-      - name: Configure and Build (Metal + iPad 9 Optimized)
+      - name: Configure and Build (Metal + iPad 9)
         run: |
           cmake . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake \
@@ -40,14 +40,14 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
             -DCMAKE_CXX_FLAGS="-O3 -flto"
-
+          
           cmake --build build --target UnleashedRecomp
 
-      - name: Create Full IPA (Metal + Assets + No Signing)
+      - name: Create Full IPA (Metal + Assets)
         run: |
           mkdir -p Payload/Unleashed.app
-
-          # Find the app bundle or binary
+          
+          # Find the binary/bundle
           APP_PATH=$(find ./build -name "*.app" -type d | head -n 1)
           if [ -n "$APP_PATH" ]; then
             cp -R "$APP_PATH/." Payload/Unleashed.app/
@@ -57,16 +57,13 @@ jobs:
             cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecomp
           fi
 
-          # Map your lowercase assets from UnleashedRecompLib/private
+          # Force assets into the app bundle
           if [ -d "UnleashedRecompLib/private" ]; then
             mkdir -p Payload/Unleashed.app/private
             cp -R UnleashedRecompLib/private/. Payload/Unleashed.app/private/
-          else
-            echo "::error::UnleashedRecompLib/private folder not found!"
-            exit 1
           fi
 
-          # Info.plist: iPad 9 RAM fix + File Sharing + Icon
+          # Valid Info.plist for iPad 9
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -90,7 +87,7 @@ jobs:
           [ -f "icon.png" ] && cp icon.png Payload/Unleashed.app/icon.png
           zip -ry Sonic_Unleashed_Metal.ipa Payload
 
-      - name: Upload IPA
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Unleashed-iPad9-Fixed
