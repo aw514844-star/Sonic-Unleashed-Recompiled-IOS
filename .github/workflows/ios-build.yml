@@ -15,7 +15,7 @@ jobs:
         run: |
           brew install cmake ninja pkg-config freetype libpng zlib
 
-      - name: Step 1: Generate High-Performance Xcode Project
+      - name: Step 1: Generate Xcode Project
         run: |
           mkdir -p build_xcode
           cmake -S . -B build_xcode \
@@ -29,18 +29,18 @@ jobs:
       - name: Step 2: Full-Power Engine Compilation
         run: |
           PROJ_PATH=$(find build_xcode -name "*.xcodeproj" | head -n 1)
-          if [[ -z "$PROJ_PATH" ]]; then
+          if [ -z "$PROJ_PATH" ]; then
             echo "::error::Xcode project not found!"
             exit 1
           fi
           
-          # Detect the correct scheme name automatically
-          SCHEME=$(xcodebuild -list -project "$PROJ_PATH" | sed -n '/Schemes:/,$p' | sed '1d' | xargs | cut -d' ' -f1)
-          echo "Using Scheme: $SCHEME"
+          # Safely extract the scheme name
+          SCHEME_NAME=$(xcodebuild -list -project "$PROJ_PATH" | sed -n '/Schemes:/,$p' | sed '1d' | xargs | cut -d' ' -f1)
+          echo "Using Scheme: $SCHEME_NAME"
 
           xcodebuild build \
             -project "$PROJ_PATH" \
-            -scheme "$SCHEME" \
+            -scheme "$SCHEME_NAME" \
             -sdk iphoneos \
             -configuration Release \
             -derivedDataPath ./BuildDir \
@@ -56,18 +56,17 @@ jobs:
           APP_DIR="Payload/Unleashed.app"
           mkdir -p "$APP_DIR/private"
           
-          # Locating the compiled arm64 binary
+          # Find binary
           RAW_BINARY=$(find ./BuildDir -type f -exec file {} + | grep "Mach-O 64-bit" | grep "arm64" | cut -d: -f1 | head -n 1)
-          if [[ -z "$RAW_BINARY" ]]; then
+          if [ -z "$RAW_BINARY" ]; then
             echo "::error::Binary not found!"
             exit 1
           fi
           cp "$RAW_BINARY" "$APP_DIR/Unleashed"
           chmod +x "$APP_DIR/Unleashed"
 
-          # Generating Entitlements for JIT and High RAM
-          cat <<EOF > entitlements.plist
-          <?xml version="1.0" encoding="UTF-8"?>
+          # Write Entitlements file
+          printf '<?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
@@ -76,30 +75,16 @@ jobs:
               <key>run-unsigned-code</key><true/>
               <key>increased-memory-limit</key><true/>
           </dict>
-          </plist>
-          EOF
+          </plist>' > entitlements.plist
 
-          # Apply Null/Ad-Hoc signature
+          # Apply Signature
           codesign -s - --entitlements entitlements.plist --force "$APP_DIR/Unleashed"
 
-          # Create Engine Config
-          cat <<EOF > "$APP_DIR/config.toml"
-          [Video]
-          GraphicsAPI = "Metal"
-          ResolutionScale = 1.0
-          FrameRateLimit = 60
-          [Core]
-          UseJIT = true
-          FallbackToInterpreter = true
-          [Display]
-          AspectRatio = "4:3"
-          FitScreen = true
-          Fullscreen = true
-          EOF
+          # Write Config.toml
+          printf '[Video]\nGraphicsAPI = "Metal"\nResolutionScale = 1.0\nFrameRateLimit = 60\n[Core]\nUseJIT = true\nFallbackToInterpreter = true\n[Display]\nAspectRatio = "4:3"\nFitScreen = true\nFullscreen = true\n' > "$APP_DIR/config.toml"
 
-          # Create Info.plist with File Sharing enabled
-          cat <<EOF > "$APP_DIR/Info.plist"
-          <?xml version="1.0" encoding="UTF-8"?>
+          # Write Info.plist
+          printf '<?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
@@ -117,15 +102,14 @@ jobs:
               <key>UISupportedInterfaceOrientations</key>
               <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
           </dict>
-          </plist>
-          EOF
+          </plist>' > "$APP_DIR/Info.plist"
 
-          # Inject your 'private' folder contents
+          # Assets
           if [ -d "private" ]; then
             cp -r private/* "$APP_DIR/private/"
-            echo "Success: Game data injected."
+            echo "Assets injected."
           else
-            echo "::error::'private' folder not found at root!"
+            echo "::error::No private folder found!"
             exit 1
           fi
 
