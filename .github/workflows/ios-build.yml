@@ -1,4 +1,4 @@
-name: UnleashedRecompiOSD - FINAL SUCCESS
+name: Sonic Unleashed Final - IPAD 9 OPTIMIZED
 on: [workflow_dispatch, push]
 
 jobs:
@@ -9,47 +9,32 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0
 
-      - name: Force Environment Setup
+      - name: Build Engine (iPad 9 Target)
         run: |
-          git submodule update --init --recursive --force
-          mkdir -p BuildDir/Device Payload/Unleashed.app/private
-
-      - name: Build Engine (Direct Target)
-        run: |
-          # 1. HARD-CODED PATH SEARCH (Bypassing thirdparty/concurrentqueue)
-          # We search ONLY in the root and first-level subdirectories to avoid traps.
-          REAL_PROJ=$(find . -maxdepth 2 -name "*.xcodeproj" -o -name "*.xcworkspace" | grep -v "thirdparty" | head -n 1)
-          
-          if [ -z "$REAL_PROJ" ]; then 
-            echo "Searching secondary paths..."
-            REAL_PROJ=$(find . -name "*.xcodeproj" | grep -v "thirdparty" | head -n 1)
-          fi
-          
-          echo "Using Project: $REAL_PROJ"
-
-          # 2. THE BUILD (Forcing the specific scheme)
+          mkdir -p BuildDir
+          # Finds your actual project, skipping thirdparty/concurrentqueue
+          XCODE_PROJ=$(find . -not -path "*/thirdparty/*" -name "*.xcodeproj" -o -name "*.xcworkspace" | head -n 1)
           xcodebuild build \
-            -project "$REAL_PROJ" \
+            -project "$XCODE_PROJ" \
             -scheme "UnleashedRecompiOSD" \
             -sdk iphoneos \
             -configuration Release \
-            -derivedDataPath ./BuildDir/Device \
+            -derivedDataPath ./BuildDir \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      - name: Final IPA Inject
+      - name: Ultimate Final Inject (JIT & KSign Ready)
         run: |
-          # 1. ROBUST BINARY CAPTURE
-          # Find the actual arm64 executable regardless of filename
-          BINARY=$(find ./BuildDir/Device -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
+          mkdir -p Payload/Unleashed.app/private
           
-          cp "$BINARY" Payload/Unleashed.app/UnleashedRecompiOSD
-          chmod 777 Payload/Unleashed.app/UnleashedRecompiOSD
-
-          # 2. CONFIG (iPad 9 & Metal)
+          # Find and copy binary (Mach-O arm64)
+          RAW_BINARY=$(find ./BuildDir -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
+          cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecompiOSD
+          chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
+          
+          # 1. IPAD 9 OPTIMIZED CONFIG
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
@@ -63,7 +48,24 @@ jobs:
           FitScreen = true
           EOF
 
-          # 3. SIDELOAD-OPTIMIZED INFO.PLIST
+          # 2. INJECT ASSETS (.xex, .xexp, shader.ar)
+          if [ -d "UnleashedRecompLib/Private" ]; then
+            cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/private/
+          fi
+          
+          # 3. KSIGN JIT ENTITLEMENTS
+          cat <<EOF > Payload/Unleashed.app/entitlements.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+          <plist version="1.0">
+          <dict>
+              <key>get-task-allow</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # 4. iPad 9 NATIVE INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -71,27 +73,29 @@ jobs:
           <dict>
               <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
               <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
+              <key>CFBundleName</key><string>Unleashed</string>
               <key>CFBundleDisplayName</key><string>Sonic Unleashed</string>
               <key>CFBundlePackageType</key><string>APPL</string>
               <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>CFBundleVersion</key><string>200</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>MinimumOSVersion</key><string>15.0</string>
               <key>UIFileSharingEnabled</key><true/>
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
               <key>UIDeviceFamily</key><array><integer>2</integer></array>
-              <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
           </dict>
           </plist>
           EOF
+          
+          zip -ry Unleashed_Final.ipa Payload
 
-          # 4. ASSETS
-          ASSET_DIR=$(find . -type d -name "Private" | head -n 1)
-          if [ -d "$ASSET_DIR" ]; then
-            cp -r "$ASSET_DIR"/* Payload/Unleashed.app/private/
-          fi
-
-          zip -ry UnleashedRecompiOSD_Final.ipa Payload
-
-      - name: Upload
+      - name: Upload Verified Release
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Final-Ready
-          path: UnleashedRecompiOSD_Final.ipa
+          name: Unleashed-iPad9-Release
+          path: Unleashed_Final.ipa
