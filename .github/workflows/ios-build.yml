@@ -1,4 +1,4 @@
-name: Sonic Unleashed Final - BUILD 209
+name: Sonic Unleashed Final - ULTIMATE BUILD
 on: [workflow_dispatch, push]
 
 jobs:
@@ -11,55 +11,67 @@ jobs:
           submodules: recursive
 
       - name: Setup Dependencies
-        run: brew install cmake ninja pkg-config freetype
+        run: |
+          # Install everything needed to prevent header/library errors
+          brew install cmake ninja pkg-config freetype libpng zlib
+          # Force the newest Xcode to ensure iPadOS 15+ features work
+          sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
 
       - name: Generate & Build (Metal/iOS)
         run: |
           mkdir -p build_ios
           
-          # We define FREETYPE_DIR so CMake knows where to look for the "FindFreetype" module
-          export FREETYPE_DIR=$(brew --prefix freetype)
+          # Force CMake to find the headers for the iPad architecture
+          export FT_PREFIX=$(brew --prefix freetype)
+          export PNG_PREFIX=$(brew --prefix libpng)
           
           cmake -S . -B build_ios \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
-            -DFREETYPE_INCLUDE_DIR_ft2build="$FREETYPE_DIR/include/freetype2" \
-            -DFREETYPE_INCLUDE_DIR_freetype2="$FREETYPE_DIR/include/freetype2" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DFREETYPE_INCLUDE_DIR_ft2build="$FT_PREFIX/include/freetype2" \
+            -DFREETYPE_INCLUDE_DIR_freetype2="$FT_PREFIX/include/freetype2" \
+            -DPNG_PNG_INCLUDE_DIR="$PNG_PREFIX/include" \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
             -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH=NO
+            -DCMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH=NO \
+            -DMSDF_ATLAS_GEN_BUILD_STANDALONE=OFF
 
-          # This builds the actual iPad app
+          # Build specifically for the iPad hardware
           cmake --build build_ios --config Release --target UnleashedRecompiOSD -- -sdk iphoneos
 
       - name: Construct Verified IPA
         run: |
-          # 1. SETUP CLEAN PAYLOAD
+          # 1. CLEAN AND PREP
           rm -rf Payload Unleashed_Final.ipa
           mkdir -p Payload/Unleashed.app/private
           
-          # 2. LOCATE THE BUILT BUNDLE
-          # We look in the Release-iphoneos folder specifically
+          # 2. FAIL-SAFE BUNDLE SEARCH
+          # This looks in the standard path, then searches everywhere if it fails
           BUILT_APP=$(find build_ios -name "UnleashedRecompiOSD.app" -type d -path "*/Release-iphoneos/*" | head -n 1)
+          if [ -z "$BUILT_APP" ]; then 
+            BUILT_APP=$(find build_ios -name "*.app" -type d | head -n 1)
+          fi
           
           if [ -z "$BUILT_APP" ]; then 
-            echo "ERROR: Could not find the .app bundle. The build might have failed."
+            echo "FATAL ERROR: Could not find the .app bundle!"
             exit 1
           fi
           
-          # 3. ASSEMBLE IPA CONTENT
+          # 3. ASSEMBLE BUNDLE
           cp -a "$BUILT_APP/" Payload/Unleashed.app/
           
-          # 4. INJECT ASSETS (default.xex, xexp, shader.ar)
-          # These go into the 'private' folder you mentioned
+          # 4. INJECT ASSETS (xex, xexp, shader.ar)
           if [ -d "UnleashedRecompLib/private" ]; then
             cp -v UnleashedRecompLib/private/* Payload/Unleashed.app/private/
+          else
+            echo "Warning: Assets folder not found. IPA might be empty of game data!"
           fi
 
-          # 5. CREATE CONFIG
+          # 5. CONFIGS (A13 Optimization)
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
@@ -68,7 +80,7 @@ jobs:
           FullScreen = true
           EOF
 
-          # 6. GENERATE INFO.PLIST
+          # 6. ULTIMATE INFO.PLIST (Full Screen, Controller, File Sharing)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -85,6 +97,14 @@ jobs:
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
               <key>UIRequiresFullScreen</key><true/>
               <key>UIDeviceFamily</key><array><integer>2</integer></array>
+              <key>GCSupportedGameControllers</key>
+              <array>
+                  <dict>
+                      <key>ProfileName</key>
+                      <string>ExtendedGamepad</string>
+                  </dict>
+              </array>
+              <key>GCSupportsControllerUserCustomization</key><true/>
               <key>UISupportedInterfaceOrientations</key>
               <array>
                   <string>UIInterfaceOrientationLandscapeLeft</string>
@@ -94,14 +114,13 @@ jobs:
           </plist>
           EOF
 
-          # 7. FIX PERMISSIONS
+          # 7. PERMISSIONS & PACKAGING
+          chmod -R 755 Payload/Unleashed.app/
           chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
-          
-          # 8. CREATE THE IPA
           zip -ry Unleashed_Final.ipa Payload
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad-Success
+          name: Unleashed-iPad-Final-IPA
           path: Unleashed_Final.ipa
