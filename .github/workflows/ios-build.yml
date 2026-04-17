@@ -16,9 +16,6 @@ jobs:
       - name: Generate & Build (Metal/iOS)
         run: |
           mkdir -p build_ios
-          
-          # We still tell CMake where Freetype is, but we let the compiler 
-          # handle the header search paths more broadly to avoid "file not found"
           cmake -S . -B build_ios \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -28,30 +25,34 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
             -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO
 
-          # Explicitly target the iphoneos SDK during the build phase
           cmake --build build_ios --config Release --target UnleashedRecompiOSD -- -sdk iphoneos
 
       - name: Construct Verified IPA
         run: |
-          # 1. SETUP DIRECTORIES
+          # 1. SETUP CLEAN PAYLOAD
           rm -rf Payload Unleashed_Final.ipa
-          mkdir -p Payload/Unleashed.app/private
+          mkdir -p Payload/Unleashed.app
           
           # 2. LOCATE THE BUILT BUNDLE
-          # Xcode places iOS builds in a specific subdirectory
           BUILT_APP=$(find build_ios -name "UnleashedRecompiOSD.app" -type d -path "*/Release-iphoneos/*" | head -n 1)
           
           if [ -z "$BUILT_APP" ]; then 
-            echo "ERROR: Could not find the .app bundle in build_ios/Release-iphoneos"
+            echo "ERROR: Could not find the .app bundle. Check if the target name 'UnleashedRecompiOSD' is correct."
             exit 1
           fi
           
           # 3. ASSEMBLE IPA CONTENT
-          cp -r "$BUILT_APP/" Payload/Unleashed.app/
+          # Copy the entire app structure first
+          cp -a "$BUILT_APP/" Payload/Unleashed.app/
           
-          # 4. INJECT ASSETS
+          # 4. INJECT ASSETS (default.xex, xexp, shader.ar)
+          # Specifically targeting your UnleashedRecompLib/private path
           if [ -d "UnleashedRecompLib/private" ]; then
+            echo "Injecting assets from UnleashedRecompLib/private..."
+            mkdir -p Payload/Unleashed.app/private
             cp -v UnleashedRecompLib/private/* Payload/Unleashed.app/private/
+          else
+            echo "WARNING: UnleashedRecompLib/private not found! Assets not injected."
           fi
 
           # 5. CREATE CONFIG
@@ -89,11 +90,8 @@ jobs:
           </plist>
           EOF
 
-          # 7. FINAL BINARY CHECK
-          if [ ! -f "Payload/Unleashed.app/UnleashedRecompiOSD" ]; then
-            echo "CRITICAL ERROR: Binary is missing from the app bundle!"
-            exit 1
-          fi
+          # 7. ENSURE EXECUTION PERMISSIONS
+          chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
           
           # 8. ZIP IT UP
           zip -ry Unleashed_Final.ipa Payload
