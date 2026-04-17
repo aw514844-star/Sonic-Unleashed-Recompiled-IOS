@@ -1,103 +1,54 @@
-name: Sonic Unleashed Final - INFINITE STABILITY
-on: [workflow_dispatch, push]
+name: "Sonic Unleashed Final - TOTAL STABILITY"
+
+on: 
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
 
 jobs:
-  build-and-test:
+  build:
     runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
-      - name: Build Engine (Targeted Search)
+      - name: Environment Preparation
         run: |
-          mkdir -p BuildDir/Device
+          # 1. CLEANING PATHS
+          # Remove other xcodeproj files to prevent build ambiguity, but keep the engine
+          find . -name "*.xcodeproj" -not -path "./UnleashedRecompiOSD*" -not -path "./*Unleashed*" -exec rm -rf {} +
           
-          # 1. FIND THE EXACT PROJECT CONTAINING YOUR SCHEME
-          # We search for all projects, then ask xcodebuild which one actually has your scheme
-          # This prevents the 'concurrentqueue' error permanently.
-          FINAL_PROJ=""
-          for proj in $(find . -name "*.xcodeproj" -o -name "*.xcworkspace"); do
-            if xcodebuild -list -project "$proj" | grep -q "UnleashedRecompiOSD"; then
-              FINAL_PROJ="$proj"
-              break
-            fi
-          done
+          # 2. CREATE IPA STRUCTURE
+          mkdir -p Payload/Unleashed.app/private
 
-          if [ -z "$FINAL_PROJ" ]; then
-            echo "ERROR: Could not find a project with scheme UnleashedRecompiOSD"
-            exit 1
-          fi
-          echo "Confirmed Project: $FINAL_PROJ"
+      - name: Build Engine (Aggressive Optimization & No Signing)
+        run: |
+          # 1. AUTO-SCHEME DETECTION
+          PROJ=$(find . -maxdepth 2 -name "*.xcodeproj" -o -name "*.xcworkspace" | head -n 1)
+          SCHEME=$(xcodebuild -list -project "$PROJ" | grep -i "Unleashed" | tr -d ' ' | head -n 1)
+          if [ -z "$SCHEME" ]; then SCHEME="UnleashedRecompiOSD"; fi
+          
+          echo "Building Project: $PROJ with Scheme: $SCHEME"
 
-          # 2. BUILD FOR DEVICE (Optimized for iPad 9)
+          # 2. XCODEBUILD WITHOUT SIGNING
           xcodebuild build \
-            -project "$FINAL_PROJ" \
-            -scheme "UnleashedRecompiOSD" \
+            -project "$PROJ" \
+            -scheme "$SCHEME" \
             -sdk iphoneos \
             -configuration Release \
-            -derivedDataPath ./BuildDir/Device \
+            -derivedDataPath ./BuildDir \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            GENERATE_INFOPLIST_FILE=YES
 
-      - name: Ultimate Final Inject (Zero-Crash Config)
+      - name: Binary & Asset Injection
         run: |
-          mkdir -p Payload/Unleashed.app/private
-          
-          # 1. FIND COMPILED BINARY
-          BINARY=$(find ./BuildDir/Device -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
-          cp "$BINARY" Payload/Unleashed.app/UnleashedRecompiOSD
-          chmod 777 Payload/Unleashed.app/UnleashedRecompiOSD
-          
-          # 2. DUAL-MODE CONFIG (Metal + JIT Fallback)
-          cat <<EOF > Payload/Unleashed.app/config.toml
-          [Video]
-          GraphicsAPI = "Metal"
-          ResolutionScale = 1.0
-          FrameRateLimit = 60
-          [Core]
-          UseJIT = true
-          FallbackToInterpreter = true
-          [Display]
-          AspectRatio = "4:3"
-          FitScreen = true
-          EOF
-          
-          # 3. ASSET INJECTION
-          if [ -d "UnleashedRecompLib/Private" ]; then
-            cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/private/
-          fi
-          
-          # 4. INFO.PLIST (Maximum Compatibility)
-          cat <<EOF > Payload/Unleashed.app/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
-              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
-              <key>CFBundleName</key><string>Unleashed</string>
-              <key>CFBundleDisplayName</key><string>Sonic Unleashed</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>1.0</string>
-              <key>UIFileSharingEnabled</key><true/>
-              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-              <key>UIDeviceFamily</key><array><integer>2</integer></array>
-              <key>UISupportedInterfaceOrientations</key>
-              <array>
-                  <string>UIInterfaceOrientationLandscapeLeft</string>
-                  <string>UIInterfaceOrientationLandscapeRight</string>
-              </array>
-          </dict>
-          </plist>
-          EOF
-          
-          zip -ry UnleashedRecompiOSD.ipa Payload
-
-      - name: Upload Final Release
-        uses: actions/upload-artifact@v4
-        with:
-          name: UnleashedRecompiOSD-IPA
-          path: UnleashedRecompiOSD.ipa
+          # 1. FIND THE ARM64 BINARY
+          BINARY=$(find ./BuildDir -type f -perm +111 ! -name "*.dylib" -exec file {} + | grep "Mach-O" | grep "arm64"
