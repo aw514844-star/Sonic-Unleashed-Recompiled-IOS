@@ -1,8 +1,8 @@
-name: Sonic Unleashed Final - BUILD 200
+name: Sonic Unleashed - NO SIGNING - IPAD 9
 on: [workflow_dispatch, push]
 
 jobs:
-  build:
+  build-and-test:
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -10,52 +10,71 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build Engine
+      - name: Build Engine (Simulator & Device)
         run: |
           mkdir -p BuildDir
-          # Build specifically for the Nerun port scheme
+          # Build for Simulator (to test in VM)
+          xcodebuild build \
+            -scheme "UnleashedRecompiOSD" \
+            -sdk iphonesimulator \
+            -configuration Release \
+            -derivedDataPath ./BuildDir/Simulator \
+            CODE_SIGNING_ALLOWED=NO
+
+          # Build for iPad (The actual IPA)
           xcodebuild build \
             -scheme "UnleashedRecompiOSD" \
             -sdk iphoneos \
             -configuration Release \
-            -derivedDataPath ./BuildDir \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES || true
+            -derivedDataPath ./BuildDir/Device \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: VM Boot Test (Verify No Crash)
+        run: |
+          # Create and boot a virtual iPad 9
+          UDID=$(xcrun simctl create "iPad9Test" "com.apple.CoreSimulator.SimDeviceType.iPad-9th-generation" "com.apple.CoreSimulator.SimRuntime.iOS-17-0")
+          xcrun simctl boot $UDID
+          
+          APP_PATH=$(find ./BuildDir/Simulator -name "*.app" | head -n 1)
+          
+          echo "Installing to VM..."
+          xcrun simctl install $UDID "$APP_PATH"
+          
+          # Attempt launch - if it returns an error, the build is broken
+          xcrun simctl launch --terminate-running-process $UDID "com.unleashed.recomp"
+          
+          xcrun simctl delete $UDID
 
       - name: Ultimate Final Inject
         run: |
-          # 1. SETUP CLEAN BUNDLE STRUCTURE
+          # 1. SETUP STRUCTURE
           mkdir -p Payload/Unleashed.app/private
-
-          # 2. FIND & VERIFY BINARY (Supports UnleashedRecompiOSD)
-          # Specifically looking for your project's Mach-O arm64 executable
-          RAW_BINARY=$(find ./BuildDir -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
-          if [ -z "$RAW_BINARY" ]; then
-            RAW_BINARY=$(find . -type f -size +1M -perm +111 | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
-          fi
           
-          if [ -z "$RAW_BINARY" ]; then echo "Error: Project binary not found!"; exit 1; fi
-          
-          # Move binary and ensure it has the correct project name for the Info.plist
-          cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecompiOSD
+          # 2. FIND DEVICE BINARY
+          BINARY=$(find ./BuildDir/Device -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
+          cp "$BINARY" Payload/Unleashed.app/UnleashedRecompiOSD
           chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
-
-          # 3. METAL CONFIG (A13 iPad 9 Optimization)
+          
+          # 3. NO-SIGNING OPTIMIZED CONFIG
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
-          ResolutionScale = 0.8
+          ResolutionScale = 1.0
           FrameRateLimit = 60
+          [Core]
+          UseJIT = true
+          FallbackToInterpreter = true
+          [Display]
+          AspectRatio = "4:3"
+          FitScreen = true
           EOF
-
-          # 4. INJECT ASSETS
+          
+          # 4. ASSETS
           if [ -d "UnleashedRecompLib/Private" ]; then
-            echo "Injecting Private Assets into /private..."
             cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/private/
           fi
-
-          # 5. iPad 9 & MEMORY OPTIMIZED INFO.PLIST
+          
+          # 5. UNRESTRICTED INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -63,20 +82,12 @@ jobs:
           <dict>
               <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
               <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
-              <key>CFBundleName</key><string>Unleashed</string>
+              <key>CFBundleDisplayName</key><string>Sonic Unleashed</string>
               <key>CFBundlePackageType</key><string>APPL</string>
               <key>CFBundleShortVersionString</key><string>1.0</string>
-              <key>CFBundleVersion</key><string>1</string>
-              <key>LSRequiresIPhoneOS</key><true/>
-              <key>MinimumOSVersion</key><string>15.0</string>
               <key>UIFileSharingEnabled</key><true/>
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-              <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
-              <key>UIDeviceFamily</key>
-              <array>
-                  <integer>1</integer>
-                  <integer>2</integer>
-              </array>
+              <key>UIDeviceFamily</key><array><integer>2</integer></array>
               <key>UISupportedInterfaceOrientations</key>
               <array>
                   <string>UIInterfaceOrientationLandscapeLeft</string>
@@ -85,11 +96,11 @@ jobs:
           </dict>
           </plist>
           EOF
-
+          
           zip -ry Unleashed_Final.ipa Payload
 
-      - name: Upload Artifact
+      - name: Upload Final Build
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Final-IPA
+          name: Unleashed-Final-NoSign
           path: Unleashed_Final.ipa
