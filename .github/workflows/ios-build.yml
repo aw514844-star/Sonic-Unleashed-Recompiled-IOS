@@ -1,4 +1,4 @@
-name: Sonic Unleashed Ultimate
+name: Sonic Unleashed Final - BUILD 208
 on: [workflow_dispatch, push]
 
 jobs:
@@ -10,49 +10,58 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Setup Dependencies
-        run: brew install cmake ninja pkg-config freetype
+      - name: Force Fix Dependencies
+        run: |
+          brew install cmake ninja pkg-config freetype
+          # Create a shim to trick CMake if FindFreetype fails
+          sudo ln -s $(brew --prefix freetype)/include/freetype2/ft2build.h /usr/local/include/ft2build.h
+          sudo ln -s $(brew --prefix freetype)/include/freetype2 /usr/local/include/freetype2
 
       - name: Generate & Build (Metal/iOS)
         run: |
           mkdir -p build_ios
-          # Fix: Using ONLY search mode for iOS to avoid macOS library contamination
+          # Hard-code variables to bypass FindPackage failure
           cmake -S . -B build_ios \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
-            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
-            -DFREETYPE_INCLUDE_DIRS=$(brew --prefix freetype)/include/freetype2 \
+            -DFREETYPE_FOUND=TRUE \
+            -DFREETYPE_INCLUDE_DIR_ft2build=$(brew --prefix freetype)/include/freetype2 \
+            -DFREETYPE_INCLUDE_DIR_freetype2=$(brew --prefix freetype)/include/freetype2 \
+            -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.a \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-          # Direct build of the iOS target
           cmake --build build_ios --config Release --target UnleashedRecompiOSD -- -sdk iphoneos
 
-      - name: Ultimate Final Inject & Verify
+      - name: Construct Verified IPA
         run: |
-          # 1. CLEAN SETUP
-          rm -rf Payload
+          # 1. CLEANING AND BUNDLE SETUP
+          rm -rf Payload Unleashed_Final.ipa
           mkdir -p Payload/Unleashed.app/private
           
           # 2. FIND APP BUNDLE
-          # This specifically looks for the folder created by the Xcode build
           BUILT_APP=$(find build_ios -name "UnleashedRecompiOSD.app" -type d | head -n 1)
-          if [ -z "$BUILT_APP" ]; then echo "FAILED: No .app found!"; exit 1; fi
+          if [ -z "$BUILT_APP" ]; then echo "CRITICAL ERROR: No .app found! Build failed."; exit 1; fi
           
-          # 3. CONSTRUCT APP (No empty IPA)
+          # 3. ASSEMBLE BUNDLE
           cp -r "$BUILT_APP/" Payload/Unleashed.app/
+          
+          # Ensure the binary is correctly named and executable
+          mv Payload/Unleashed.app/UnleashedRecompiOSD Payload/Unleashed.app/UnleashedRecompiOSD_bin || true
+          cp $(find build_ios -name "UnleashedRecompiOSD" -type f | head -n 1) Payload/Unleashed.app/UnleashedRecompiOSD
           chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
 
-          # 4. INJECT CRITICAL ASSETS (Check for default.xex and shader.ar)
+          # 4. INJECT ASSETS (default.xex, xexp, shader.ar)
+          # Specifically maps from UnleashedRecompLib/private to app internal /private
           if [ -d "UnleashedRecompLib/private" ]; then
-            cp -v UnleashedRecompLib/private/* Payload/Unleashed.app/private/
+             cp -v UnleashedRecompLib/private/* Payload/Unleashed.app/private/
+          elif [ -d "UnleashedRecompLib/Private" ]; then
+             cp -v UnleashedRecompLib/Private/* Payload/Unleashed.app/private/
           fi
-          
-          # Verify files exist so we don't make an empty IPA
-          ls -R Payload/Unleashed.app/private/
 
-          # 5. CONFIGS (Metal & iPad Fullscreen)
+          # 5. CONFIGS (Metal API + iPad 9 A13 Optimization)
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
@@ -61,6 +70,7 @@ jobs:
           FullScreen = true
           EOF
 
+          # 6. INFO.PLIST (File Sharing + Full Screen + iPad Support)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com/DTDs/PropertyList-1.0.dtd">
@@ -71,20 +81,28 @@ jobs:
               <key>CFBundleName</key><string>Unleashed</string>
               <key>CFBundlePackageType</key><string>APPL</string>
               <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>MinimumOSVersion</key><string>15.0</string>
               <key>UIFileSharingEnabled</key><true/>
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
               <key>UIRequiresFullScreen</key><true/>
               <key>UIDeviceFamily</key><array><integer>2</integer></array>
               <key>UISupportedInterfaceOrientations</key>
-              <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+              <array>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
           </dict>
           </plist>
           EOF
 
+          # 7. FINAL VERIFICATION
+          if [ ! -f "Payload/Unleashed.app/UnleashedRecompiOSD" ]; then echo "IPA is empty! Failing."; exit 1; fi
+          
           zip -ry Unleashed_Final.ipa Payload
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Final-IPA
+          name: Unleashed-iPad-Success
           path: Unleashed_Final.ipa
