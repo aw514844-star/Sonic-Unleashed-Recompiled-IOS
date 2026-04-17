@@ -1,4 +1,5 @@
 name: Sonic Unleashed
+
 on: [workflow_dispatch, push]
 
 jobs:
