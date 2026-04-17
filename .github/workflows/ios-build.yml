@@ -11,48 +11,52 @@ jobs:
           submodules: recursive
 
       - name: Setup Dependencies
-        run: brew install cmake ninja pkg-config
+        run: brew install cmake ninja pkg-config freetype
 
       - name: Generate & Build (Metal/iOS)
         run: |
           mkdir -p build_ios
+          
+          # We define FREETYPE_DIR so CMake knows where to look for the "FindFreetype" module
+          export FREETYPE_DIR=$(brew --prefix freetype)
+          
           cmake -S . -B build_ios \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DFREETYPE_INCLUDE_DIR_ft2build="$FREETYPE_DIR/include/freetype2" \
+            -DFREETYPE_INCLUDE_DIR_freetype2="$FREETYPE_DIR/include/freetype2" \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO
+            -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH=NO
 
+          # This builds the actual iPad app
           cmake --build build_ios --config Release --target UnleashedRecompiOSD -- -sdk iphoneos
 
       - name: Construct Verified IPA
         run: |
           # 1. SETUP CLEAN PAYLOAD
           rm -rf Payload Unleashed_Final.ipa
-          mkdir -p Payload/Unleashed.app
+          mkdir -p Payload/Unleashed.app/private
           
           # 2. LOCATE THE BUILT BUNDLE
+          # We look in the Release-iphoneos folder specifically
           BUILT_APP=$(find build_ios -name "UnleashedRecompiOSD.app" -type d -path "*/Release-iphoneos/*" | head -n 1)
           
           if [ -z "$BUILT_APP" ]; then 
-            echo "ERROR: Could not find the .app bundle. Check if the target name 'UnleashedRecompiOSD' is correct."
+            echo "ERROR: Could not find the .app bundle. The build might have failed."
             exit 1
           fi
           
           # 3. ASSEMBLE IPA CONTENT
-          # Copy the entire app structure first
           cp -a "$BUILT_APP/" Payload/Unleashed.app/
           
           # 4. INJECT ASSETS (default.xex, xexp, shader.ar)
-          # Specifically targeting your UnleashedRecompLib/private path
+          # These go into the 'private' folder you mentioned
           if [ -d "UnleashedRecompLib/private" ]; then
-            echo "Injecting assets from UnleashedRecompLib/private..."
-            mkdir -p Payload/Unleashed.app/private
             cp -v UnleashedRecompLib/private/* Payload/Unleashed.app/private/
-          else
-            echo "WARNING: UnleashedRecompLib/private not found! Assets not injected."
           fi
 
           # 5. CREATE CONFIG
@@ -90,10 +94,10 @@ jobs:
           </plist>
           EOF
 
-          # 7. ENSURE EXECUTION PERMISSIONS
+          # 7. FIX PERMISSIONS
           chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
           
-          # 8. ZIP IT UP
+          # 8. CREATE THE IPA
           zip -ry Unleashed_Final.ipa Payload
 
       - name: Upload Artifact
