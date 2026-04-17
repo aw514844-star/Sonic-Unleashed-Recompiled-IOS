@@ -1,4 +1,4 @@
-name: Sonic Unleashed - ABSOLUTE ZERO EDITION
+name: Sonic Unleashed - OMEGA RECOMP
 on: [workflow_dispatch, push]
 
 jobs:
@@ -9,23 +9,29 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
-      - name: Setup Dependencies
+      - name: Hardened Dependencies
         run: |
-          brew install cmake ninja pkg-config freetype libpng zlib
-          echo "/opt/homebrew/bin" >> $GITHUB_PATH
+          brew install cmake ninja pkg-config freetype libpng zlib curl openssl@3
+          # Force the path to prioritize Homebrew
+          echo "/opt/homebrew/bin:/usr/local/bin" >> $GITHUB_PATH
           sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
 
-      - name: Generate & Build (Metal/iOS)
+      - name: The Unexpected Shield (Pre-Build)
         run: |
+          # Clean up any potential submodule ghosts
+          git submodule foreach --recursive git clean -ffdx
           mkdir -p build_ios
+
+      - name: Generate & Build (Metal/iOS/Hardened)
+        run: |
+          # Dynamic Path Discovery (The "Search & Destroy" for errors)
+          export FT_PATH=$(brew --prefix freetype)
+          export PNG_PATH=$(brew --prefix libpng)
+          export CURL_PATH=$(brew --prefix curl)
+          export SSL_PATH=$(brew --prefix openssl@3)
           
-          # Find the exact paths
-          export FT_PREFIX=$(brew --prefix freetype)
-          export PNG_PREFIX=$(brew --prefix libpng)
-          
-          # THE "SUBMODULE CRUSHER": We force these variables into the environment
-          # so that msdfgen and other sub-folders CANNOT miss them.
           cmake -S . -B build_ios \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -35,18 +41,26 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
             -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO \
+            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
             -DMSDF_ATLAS_GEN_BUILD_STANDALONE=OFF \
-            -DFREETYPE_INCLUDE_DIRS="$FT_PREFIX/include/freetype2" \
-            -DFREETYPE_LIBRARY="$FT_PREFIX/lib/libfreetype.a" \
+            -DFREETYPE_INCLUDE_DIRS="$FT_PATH/include/freetype2" \
+            -DFREETYPE_LIBRARY="$FT_PATH/lib/libfreetype.a" \
             -DFREETYPE_FOUND=TRUE \
-            -DPNG_INCLUDE_DIRS="$PNG_PREFIX/include" \
-            -DPNG_LIBRARY="$PNG_PREFIX/lib/libpng.a" \
+            -DPNG_INCLUDE_DIRS="$PNG_PATH/include" \
+            -DPNG_LIBRARY="$PNG_PATH/lib/libpng.a" \
             -DPNG_FOUND=TRUE \
-            -DZLIB_FOUND=TRUE \
+            -DCURL_INCLUDE_DIR="$CURL_PATH/include" \
+            -DCURL_LIBRARY="$CURL_PATH/lib/libcurl.a" \
+            -DCURL_FOUND=TRUE \
+            -DOPENSSL_ROOT_DIR="$SSL_PATH" \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE \
+            -DZLIB_ROOT=$(brew --prefix zlib) \
             -DMSDFGEN_USE_VCPKG=OFF \
-            -DMSDFGEN_BUILD_STANDALONE=OFF
+            -DMSDFGEN_BUILD_STANDALONE=OFF \
+            -DSDL_STATIC=ON \
+            -DSDL_METAL=ON
 
-          # Final Build Command
+          # The Build Execution
           cmake --build build_ios --config Release --target UnleashedRecompiOSD -- -sdk iphoneos
 
       - name: Construct Verified IPA
@@ -54,18 +68,13 @@ jobs:
           rm -rf Payload Unleashed_Final.ipa
           mkdir -p Payload/Unleashed.app/private
           
-          # Search for the .app folder
+          # Advanced Search for the binary
           BUILT_APP=$(find build_ios -name "UnleashedRecompiOSD.app" -type d | grep "Release-iphoneos" | head -n 1)
           if [ -z "$BUILT_APP" ]; then BUILT_APP=$(find build_ios -name "*.app" -type d | head -n 1); fi
           
           cp -a "$BUILT_APP/" Payload/Unleashed.app/
           
-          # Inject your .xex and title update files
-          if [ -d "UnleashedRecompLib/private" ]; then
-            cp -v UnleashedRecompLib/private/* Payload/Unleashed.app/private/
-          fi
-
-          # Config for iPad 9 (A13)
+          # Inject Config & Info.plist
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
@@ -74,7 +83,6 @@ jobs:
           FullScreen = true
           EOF
 
-          # Final Info.plist (Controller + Full Screen)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -93,10 +101,7 @@ jobs:
               <key>GCSupportedGameControllers</key>
               <array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
               <key>UISupportedInterfaceOrientations</key>
-              <array>
-                  <string>UIInterfaceOrientationLandscapeLeft</string>
-                  <string>UIInterfaceOrientationLandscapeRight</string>
-              </array>
+              <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
           </dict>
           </plist>
           EOF
@@ -107,5 +112,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad-Absolute-Zero
+          name: Unleashed-iPad-OMEGA
           path: Unleashed_Final.ipa
