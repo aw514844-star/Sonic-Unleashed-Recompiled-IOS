@@ -1,4 +1,4 @@
-name: Sonic Unleashed Final - BUILD 208
+name: Sonic Unleashed Final - BUILD 209
 on: [workflow_dispatch, push]
 
 jobs:
@@ -10,58 +10,51 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Force Fix Dependencies
-        run: |
-          brew install cmake ninja pkg-config freetype
-          # Create a shim to trick CMake if FindFreetype fails
-          sudo ln -s $(brew --prefix freetype)/include/freetype2/ft2build.h /usr/local/include/ft2build.h
-          sudo ln -s $(brew --prefix freetype)/include/freetype2 /usr/local/include/freetype2
+      - name: Setup Dependencies
+        run: brew install cmake ninja pkg-config
 
       - name: Generate & Build (Metal/iOS)
         run: |
           mkdir -p build_ios
-          # Hard-code variables to bypass FindPackage failure
+          
+          # We still tell CMake where Freetype is, but we let the compiler 
+          # handle the header search paths more broadly to avoid "file not found"
           cmake -S . -B build_ios \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
-            -DFREETYPE_FOUND=TRUE \
-            -DFREETYPE_INCLUDE_DIR_ft2build=$(brew --prefix freetype)/include/freetype2 \
-            -DFREETYPE_INCLUDE_DIR_freetype2=$(brew --prefix freetype)/include/freetype2 \
-            -DFREETYPE_LIBRARY=$(brew --prefix freetype)/lib/libfreetype.a \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES
+            -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO
 
+          # Explicitly target the iphoneos SDK during the build phase
           cmake --build build_ios --config Release --target UnleashedRecompiOSD -- -sdk iphoneos
 
       - name: Construct Verified IPA
         run: |
-          # 1. CLEANING AND BUNDLE SETUP
+          # 1. SETUP DIRECTORIES
           rm -rf Payload Unleashed_Final.ipa
           mkdir -p Payload/Unleashed.app/private
           
-          # 2. FIND APP BUNDLE
-          BUILT_APP=$(find build_ios -name "UnleashedRecompiOSD.app" -type d | head -n 1)
-          if [ -z "$BUILT_APP" ]; then echo "CRITICAL ERROR: No .app found! Build failed."; exit 1; fi
+          # 2. LOCATE THE BUILT BUNDLE
+          # Xcode places iOS builds in a specific subdirectory
+          BUILT_APP=$(find build_ios -name "UnleashedRecompiOSD.app" -type d -path "*/Release-iphoneos/*" | head -n 1)
           
-          # 3. ASSEMBLE BUNDLE
+          if [ -z "$BUILT_APP" ]; then 
+            echo "ERROR: Could not find the .app bundle in build_ios/Release-iphoneos"
+            exit 1
+          fi
+          
+          # 3. ASSEMBLE IPA CONTENT
           cp -r "$BUILT_APP/" Payload/Unleashed.app/
           
-          # Ensure the binary is correctly named and executable
-          mv Payload/Unleashed.app/UnleashedRecompiOSD Payload/Unleashed.app/UnleashedRecompiOSD_bin || true
-          cp $(find build_ios -name "UnleashedRecompiOSD" -type f | head -n 1) Payload/Unleashed.app/UnleashedRecompiOSD
-          chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
-
-          # 4. INJECT ASSETS (default.xex, xexp, shader.ar)
-          # Specifically maps from UnleashedRecompLib/private to app internal /private
+          # 4. INJECT ASSETS
           if [ -d "UnleashedRecompLib/private" ]; then
-             cp -v UnleashedRecompLib/private/* Payload/Unleashed.app/private/
-          elif [ -d "UnleashedRecompLib/Private" ]; then
-             cp -v UnleashedRecompLib/Private/* Payload/Unleashed.app/private/
+            cp -v UnleashedRecompLib/private/* Payload/Unleashed.app/private/
           fi
 
-          # 5. CONFIGS (Metal API + iPad 9 A13 Optimization)
+          # 5. CREATE CONFIG
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
@@ -70,10 +63,10 @@ jobs:
           FullScreen = true
           EOF
 
-          # 6. INFO.PLIST (File Sharing + Full Screen + iPad Support)
+          # 6. GENERATE INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com/DTDs/PropertyList-1.0.dtd">
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
               <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
@@ -96,9 +89,13 @@ jobs:
           </plist>
           EOF
 
-          # 7. FINAL VERIFICATION
-          if [ ! -f "Payload/Unleashed.app/UnleashedRecompiOSD" ]; then echo "IPA is empty! Failing."; exit 1; fi
+          # 7. FINAL BINARY CHECK
+          if [ ! -f "Payload/Unleashed.app/UnleashedRecompiOSD" ]; then
+            echo "CRITICAL ERROR: Binary is missing from the app bundle!"
+            exit 1
+          fi
           
+          # 8. ZIP IT UP
           zip -ry Unleashed_Final.ipa Payload
 
       - name: Upload Artifact
