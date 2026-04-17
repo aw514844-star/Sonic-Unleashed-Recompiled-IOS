@@ -1,4 +1,4 @@
-name: Sonic Unleashed - ULTIMATE ZERO-ERROR BUILD
+name: Sonic Unleashed Final - INFINITE STABILITY
 on: [workflow_dispatch, push]
 
 jobs:
@@ -10,17 +10,30 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build Engine (All-Terrain Pathing)
+      - name: Build Engine (Targeted Search)
         run: |
-          mkdir -p BuildDir/Device BuildDir/Simulator
+          mkdir -p BuildDir/Device
           
-          # 1. FIND PROJECT (Failsafe for any folder structure)
-          XCODE_PATH=$(find . -name "*.xcodeproj" -o -name "*.xcworkspace" | head -n 1)
-          if [ -z "$XCODE_PATH" ]; then echo "ERROR: No project found!"; exit 1; fi
-          
+          # 1. FIND THE EXACT PROJECT CONTAINING YOUR SCHEME
+          # We search for all projects, then ask xcodebuild which one actually has your scheme
+          # This prevents the 'concurrentqueue' error permanently.
+          FINAL_PROJ=""
+          for proj in $(find . -name "*.xcodeproj" -o -name "*.xcworkspace"); do
+            if xcodebuild -list -project "$proj" | grep -q "UnleashedRecompiOSD"; then
+              FINAL_PROJ="$proj"
+              break
+            fi
+          done
+
+          if [ -z "$FINAL_PROJ" ]; then
+            echo "ERROR: Could not find a project with scheme UnleashedRecompiOSD"
+            exit 1
+          fi
+          echo "Confirmed Project: $FINAL_PROJ"
+
           # 2. BUILD FOR DEVICE (Optimized for iPad 9)
           xcodebuild build \
-            -project "$XCODE_PATH" \
+            -project "$FINAL_PROJ" \
             -scheme "UnleashedRecompiOSD" \
             -sdk iphoneos \
             -configuration Release \
@@ -29,32 +42,16 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      - name: Ultimate Final Inject (JIT & KSign Optimized)
+      - name: Ultimate Final Inject (Zero-Crash Config)
         run: |
           mkdir -p Payload/Unleashed.app/private
           
-          # 1. FIND BINARY
+          # 1. FIND COMPILED BINARY
           BINARY=$(find ./BuildDir/Device -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
           cp "$BINARY" Payload/Unleashed.app/UnleashedRecompiOSD
           chmod 777 Payload/Unleashed.app/UnleashedRecompiOSD
           
-          # 2. JIT ENTITLEMENTS (Crucial for KSign/AltStore JIT)
-          # This file allows the debugger to attach, which is how JIT is enabled.
-          cat <<EOF > entitlements.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0">
-          <dict>
-              <key>get-task-allow</key>
-              <true/>
-              <key>run-unsigned-code</key>
-              <true/>
-          </dict>
-          </plist>
-          EOF
-          cp entitlements.plist Payload/Unleashed.app/entitlements.plist
-
-          # 3. DUAL-MODE CONFIG (Safe JIT)
+          # 2. DUAL-MODE CONFIG (Metal + JIT Fallback)
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
@@ -67,6 +64,11 @@ jobs:
           AspectRatio = "4:3"
           FitScreen = true
           EOF
+          
+          # 3. ASSET INJECTION
+          if [ -d "UnleashedRecompLib/Private" ]; then
+            cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/private/
+          fi
           
           # 4. INFO.PLIST (Maximum Compatibility)
           cat <<EOF > Payload/Unleashed.app/Info.plist
@@ -92,15 +94,10 @@ jobs:
           </plist>
           EOF
           
-          # 5. ASSETS
-          if [ -d "UnleashedRecompLib/Private" ]; then
-            cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/private/
-          fi
-          
           zip -ry UnleashedRecompiOSD.ipa Payload
 
-      - name: Upload Finished Release
+      - name: Upload Final Release
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Final-Ready
+          name: UnleashedRecompiOSD-IPA
           path: UnleashedRecompiOSD.ipa
