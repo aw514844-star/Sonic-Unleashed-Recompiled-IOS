@@ -11,31 +11,30 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install Build Infrastructure
-        run: brew install cmake ninja pkg-config
+      - name: Install AI Build Infrastructure
+        run: |
+          # Added freetype and libpng which are required by msdfgen
+          brew install cmake ninja pkg-config freetype libpng
 
-      - name: Generate Xcode Project
+      - name: Step 1: Generate High-Performance Xcode Project
         run: |
           mkdir -p build_xcode
+          # We point CMake to the Homebrew directory so it finds Freetype automatically
           cmake -S . -B build_xcode \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_PREFIX_PATH="/opt/homebrew/opt/freetype" \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_BUILD_TYPE=Release
 
-      - name: Full-Power Engine Compilation
+      - name: Step 2: Full-Power Engine Compilation
         run: |
           PROJ_PATH=$(find build_xcode -name "*.xcodeproj" | head -n 1)
-          if [[ -z "$PROJ_PATH" ]]; then
-            echo "::error::Xcode project not found!"
-            exit 1
-          fi
+          if [[ -z "$PROJ_PATH" ]]; then exit 1; fi
           
-          # Safely detect the first available scheme
           SCHEME=$(xcodebuild -list -project "$PROJ_PATH" | sed -n '/Schemes:/,$p' | sed '1d' | xargs | cut -d' ' -f1)
-          echo "Detected Scheme: $SCHEME"
-
+          
           xcodebuild build \
             -project "$PROJ_PATH" \
             -scheme "$SCHEME" \
@@ -49,21 +48,15 @@ jobs:
             OTHER_CFLAGS="-march=apple-a13 -O3 -flto" \
             OTHER_LDFLAGS="-flto"
 
-      - name: Ultimate Hardening & Asset Injection
+      - name: Step 3: Ultimate Hardening & Asset Injection
         run: |
           APP_DIR="Payload/Unleashed.app"
           mkdir -p "$APP_DIR/private"
           
-          # Find and move the compiled binary
           RAW_BINARY=$(find ./BuildDir -type f -exec file {} + | grep "Mach-O 64-bit" | grep "arm64" | cut -d: -f1 | head -n 1)
-          if [[ -z "$RAW_BINARY" ]]; then
-            echo "::error::Binary not found!"
-            exit 1
-          fi
           cp "$RAW_BINARY" "$APP_DIR/Unleashed"
           chmod +x "$APP_DIR/Unleashed"
 
-          # Create Entitlements
           cat <<EOF > entitlements.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -77,10 +70,8 @@ jobs:
           </plist>
           EOF
 
-          # Apply Ad-Hoc Sign
           codesign -s - --entitlements entitlements.plist --force "$APP_DIR/Unleashed"
 
-          # Generate Config.toml
           cat <<EOF > "$APP_DIR/config.toml"
           [Video]
           GraphicsAPI = "Metal"
@@ -95,7 +86,6 @@ jobs:
           Fullscreen = true
           EOF
 
-          # Generate Info.plist
           cat <<EOF > "$APP_DIR/Info.plist"
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -118,16 +108,14 @@ jobs:
           </plist>
           EOF
 
-          # Asset Injection Check
           if [ -d "private" ]; then
             cp -r private/* "$APP_DIR/private/"
-            echo "Assets injected successfully."
+            echo "Success: Game data injected."
           else
-            echo "::error::No /private folder found in root!"
+            echo "::error::Critical Error: /private root folder not found!"
             exit 1
           fi
 
-          # Final Package
           zip -ry Unleashed_Final.ipa Payload
 
       - name: Final Upload
@@ -135,4 +123,3 @@ jobs:
         with:
           name: Sonic-Unleashed-iPad9-AI
           path: Unleashed_Final.ipa
-          retention-days: 7
