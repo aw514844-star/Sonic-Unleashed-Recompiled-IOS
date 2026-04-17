@@ -1,4 +1,4 @@
-name: Sonic Unleashed Final - THE NUCLEAR FIX
+name: UnleashedRecompiOSD - FINAL SUCCESS
 on: [workflow_dispatch, push]
 
 jobs:
@@ -11,30 +11,25 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Kill the Trap & Setup
+      - name: Force Environment Setup
         run: |
-          # 1. DELETE THE TRAP (Forces the script to ignore the thirdparty project)
-          find . -name "concurrentqueue.xcodeproj" -exec rm -rf {} +
-          find . -name "MoltenVK.xcodeproj" -exec rm -rf {} +
-          
-          # 2. FORCE SUBMODULES
           git submodule update --init --recursive --force
           mkdir -p BuildDir/Device Payload/Unleashed.app/private
 
-      - name: Build Engine (Targeted Pathing)
+      - name: Build Engine (Direct Target)
         run: |
-          # 1. FIND THE REAL PROJECT
-          # We search for any project NOT in a thirdparty folder
-          REAL_PROJ=$(find . -not -path "*/thirdparty/*" -name "*.xcodeproj" -o -name "*.xcworkspace" | head -n 1)
+          # 1. HARD-CODED PATH SEARCH (Bypassing thirdparty/concurrentqueue)
+          # We search ONLY in the root and first-level subdirectories to avoid traps.
+          REAL_PROJ=$(find . -maxdepth 2 -name "*.xcodeproj" -o -name "*.xcworkspace" | grep -v "thirdparty" | head -n 1)
           
-          # Fallback: if it's still missing, search for the biggest project file
-          if [ -z "$REAL_PROJ" ]; then
-            REAL_PROJ=$(find . -name "*.xcodeproj" | xargs du -sk | sort -rn | head -n 1 | awk '{print $2}')
+          if [ -z "$REAL_PROJ" ]; then 
+            echo "Searching secondary paths..."
+            REAL_PROJ=$(find . -name "*.xcodeproj" | grep -v "thirdparty" | head -n 1)
           fi
           
-          echo "Using Verified Project: $REAL_PROJ"
+          echo "Using Project: $REAL_PROJ"
 
-          # 2. THE BUILD
+          # 2. THE BUILD (Forcing the specific scheme)
           xcodebuild build \
             -project "$REAL_PROJ" \
             -scheme "UnleashedRecompiOSD" \
@@ -47,8 +42,10 @@ jobs:
 
       - name: Final IPA Inject
         run: |
-          # 1. FIND BINARY
+          # 1. ROBUST BINARY CAPTURE
+          # Find the actual arm64 executable regardless of filename
           BINARY=$(find ./BuildDir/Device -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
+          
           cp "$BINARY" Payload/Unleashed.app/UnleashedRecompiOSD
           chmod 777 Payload/Unleashed.app/UnleashedRecompiOSD
 
@@ -66,7 +63,7 @@ jobs:
           FitScreen = true
           EOF
 
-          # 3. INFO.PLIST
+          # 3. SIDELOAD-OPTIMIZED INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -80,6 +77,7 @@ jobs:
               <key>UIFileSharingEnabled</key><true/>
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
               <key>UIDeviceFamily</key><array><integer>2</integer></array>
+              <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
           </dict>
           </plist>
           EOF
@@ -90,10 +88,10 @@ jobs:
             cp -r "$ASSET_DIR"/* Payload/Unleashed.app/private/
           fi
 
-          zip -ry Unleashed_Final.ipa Payload
+          zip -ry UnleashedRecompiOSD_Final.ipa Payload
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Success-IPA
-          path: Unleashed_Final.ipa
+          name: Unleashed-Final-Ready
+          path: UnleashedRecompiOSD_Final.ipa
