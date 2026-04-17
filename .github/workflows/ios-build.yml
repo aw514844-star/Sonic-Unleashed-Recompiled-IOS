@@ -1,4 +1,4 @@
-name: Sonic Unleashed Final - BUILD 202
+name: Sonic Unleashed Ultimate
 on: [workflow_dispatch, push]
 
 jobs:
@@ -10,50 +10,49 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Dependencies
-        run: |
-          brew install cmake ninja pkg-config
+      - name: Setup Dependencies
+        run: brew install cmake ninja pkg-config freetype
 
-      - name: Generate Xcode Project & Build
+      - name: Generate & Build (Metal/iOS)
         run: |
-          # 1. Create a build directory for CMake
-          mkdir -p build_xcode
-          
-          # 2. Generate the .xcodeproj file specifically for iOS
-          # This creates the project file that was missing
-          cmake -S . -B build_xcode \
+          mkdir -p build_ios
+          # Fix: Using ONLY search mode for iOS to avoid macOS library contamination
+          cmake -S . -B build_ios \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
+            -DFREETYPE_INCLUDE_DIRS=$(brew --prefix freetype)/include/freetype2 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO
 
-          # 3. Build using the newly generated project
-          cmake --build build_xcode --config Release --target UnleashedRecompiOSD -- -sdk iphoneos
+          # Direct build of the iOS target
+          cmake --build build_ios --config Release --target UnleashedRecompiOSD -- -sdk iphoneos
 
-      - name: Ultimate Final Inject
+      - name: Ultimate Final Inject & Verify
         run: |
-          # 1. SETUP STRUCTURE
+          # 1. CLEAN SETUP
+          rm -rf Payload
           mkdir -p Payload/Unleashed.app/private
           
-          # 2. FIND AND MOVE THE COMPILED APP
-          # CMake usually puts the .app in build_xcode/Release-iphoneos/
-          BUILT_APP=$(find build_xcode -name "UnleashedRecompiOSD.app" -type d | head -n 1)
-          if [ -d "$BUILT_APP" ]; then
-            cp -r "$BUILT_APP/" Payload/Unleashed.app/
-          else
-            echo "ERROR: Compiled .app not found!"
-            exit 1
-          fi
+          # 2. FIND APP BUNDLE
+          # This specifically looks for the folder created by the Xcode build
+          BUILT_APP=$(find build_ios -name "UnleashedRecompiOSD.app" -type d | head -n 1)
+          if [ -z "$BUILT_APP" ]; then echo "FAILED: No .app found!"; exit 1; fi
           
-          # 3. INJECT GAME ASSETS
-          # Moves your .xex and .ar files from UnleashedRecompLib/private
+          # 3. CONSTRUCT APP (No empty IPA)
+          cp -r "$BUILT_APP/" Payload/Unleashed.app/
+          chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
+
+          # 4. INJECT CRITICAL ASSETS (Check for default.xex and shader.ar)
           if [ -d "UnleashedRecompLib/private" ]; then
             cp -v UnleashedRecompLib/private/* Payload/Unleashed.app/private/
-          elif [ -d "UnleashedRecompLib/Private" ]; then
-            cp -v UnleashedRecompLib/Private/* Payload/Unleashed.app/private/
           fi
+          
+          # Verify files exist so we don't make an empty IPA
+          ls -R Payload/Unleashed.app/private/
 
-          # 4. CONFIG & METAL SETTINGS
+          # 5. CONFIGS (Metal & iPad Fullscreen)
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
@@ -62,7 +61,6 @@ jobs:
           FullScreen = true
           EOF
 
-          # 5. INFO.PLIST (iPad 9 / File Sharing / Full Screen)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com/DTDs/PropertyList-1.0.dtd">
@@ -71,4 +69,22 @@ jobs:
               <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
               <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
               <key>CFBundleName</key><string>Unleashed</string>
-              <key>CFBundlePackageType</key
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>UIFileSharingEnabled</key><true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+              <key>UIRequiresFullScreen</key><true/>
+              <key>UIDeviceFamily</key><array><integer>2</integer></array>
+              <key>UISupportedInterfaceOrientations</key>
+              <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+          </dict>
+          </plist>
+          EOF
+
+          zip -ry Unleashed_Final.ipa Payload
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unleashed-Final-IPA
+          path: Unleashed_Final.ipa
