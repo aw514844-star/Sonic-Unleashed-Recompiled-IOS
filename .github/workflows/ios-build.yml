@@ -13,19 +13,34 @@ jobs:
       - name: Build Engine
         run: |
           mkdir -p BuildDir
-          PROJ_PATH=$(find . -maxdepth 3 \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) | grep -v "thirdparty" | head -n 1)
+          
+          echo "--- SEARCHING FOR PROJECT ---"
+          # Deep search: finds .xcodeproj or .xcworkspace anywhere in the repo
+          PROJ_PATH=$(find . -name "*.xcodeproj" -o -name "*.xcworkspace" | grep -v "thirdparty" | head -n 1)
           
           if [[ -z "$PROJ_PATH" ]]; then 
-            echo "::error::No Xcode project found!"
+            echo "::error::No Xcode project found! Ensure your repo has a .xcodeproj folder."
+            ls -R
             exit 1
           fi
+          echo "Found Project: $PROJ_PATH"
           
+          # Detect if we need -workspace or -project flag
           TYPE_FLAG=$([[ "$PROJ_PATH" == *.xcworkspace ]] && echo "-workspace" || echo "-project")
-          
-          # Optimized for A13 Bionic (iPad 9)
+
+          echo "--- DETECTING SCHEME ---"
+          # Try to use your specific scheme, but fallback to the first one found if it fails
+          SCHEME="UnleashedRecompiOSD"
+          if ! xcodebuild -list $TYPE_FLAG "$PROJ_PATH" | grep -q "$SCHEME"; then
+            echo "Warning: Scheme '$SCHEME' not found. Fetching default scheme..."
+            SCHEME=$(xcodebuild -list $TYPE_FLAG "$PROJ_PATH" | sed -n '/Schemes:/,$p' | sed '1d' | xargs | cut -d' ' -f1)
+          fi
+          echo "Using Scheme: $SCHEME"
+
+          echo "--- STARTING COMPILATION ---"
           xcodebuild build \
             $TYPE_FLAG "$PROJ_PATH" \
-            -scheme "UnleashedRecompiOSD" \
+            -scheme "$SCHEME" \
             -sdk iphoneos \
             -configuration Release \
             -derivedDataPath ./BuildDir \
@@ -40,10 +55,10 @@ jobs:
           APP_DIR="Payload/Unleashed.app"
           mkdir -p "$APP_DIR/private"
           
-          # 1. FIND AND INJECT BINARY
+          # 1. FIND AND INJECT BINARY (Recursive search for the arm64 executable)
           RAW_BINARY=$(find ./BuildDir -type f -exec file {} + | grep "Mach-O 64-bit" | grep "arm64" | cut -d: -f1 | head -n 1)
           if [[ -z "$RAW_BINARY" ]]; then
-            echo "::error::Binary not found! Check your Scheme name."
+            echo "::error::Binary not found in BuildDir! Compilation likely failed."
             exit 1
           fi
           cp "$RAW_BINARY" "$APP_DIR/UnleashedRecompiOSD"
@@ -57,15 +72,13 @@ jobs:
           <dict>
               <key>get-task-allow</key><true/>
               <key>com.apple.developer.kernel.extended-virtual-addressing</key><true/>
-              <key>com.apple.developer.kernel.get-reboot-info</key><true/>
-              <key>com.apple.private.external-accessory.show-jpw</key><true/>
               <key>run-unsigned-code</key><true/>
               <key>increased-memory-limit</key><true/>
           </dict>
           </plist>
           EOF
 
-          # 3. FAKE-SIGN
+          # 3. FAKE-SIGN (Critical for KSign/AltStore)
           codesign -s - --entitlements entitlements.plist --force "$APP_DIR/UnleashedRecompiOSD"
 
           # 4. DUAL-MODE OPTIMIZED CONFIG
@@ -74,7 +87,6 @@ jobs:
           GraphicsAPI = "Metal"
           ResolutionScale = 1.0
           FrameRateLimit = 60
-          VSync = true
           [Core]
           UseJIT = true
           FallbackToInterpreter = true
@@ -113,12 +125,12 @@ jobs:
           </plist>
           EOF
 
-          # 6. TARGETED ASSET INJECTION (LOWERCASE FIX)
+          # 6. ASSET INJECTION (Strict Check for lowercase 'private')
           if [ -d "UnleashedRecompLib/private" ]; then
-            echo "Found assets in UnleashedRecompLib/private. Injecting..."
             cp -r UnleashedRecompLib/private/* "$APP_DIR/private/"
+            echo "Assets successfully injected."
           else
-            echo "::error::Assets NOT found in UnleashedRecompLib/private! Check your folder casing."
+            echo "::error::Folder UnleashedRecompLib/private not found! Ensure folder casing is lowercase."
             exit 1
           fi
 
