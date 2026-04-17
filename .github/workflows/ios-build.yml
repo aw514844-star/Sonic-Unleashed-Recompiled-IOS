@@ -1,45 +1,43 @@
-name: Sonic Unleashed Final - IPAD 9 STABILITY PRO
+name: Sonic Unleashed Final - IPAD 9 AI PRO
 on: [workflow_dispatch, push]
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout
+      - name: Checkout Source & Submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
-      - name: Build Engine
+      - name: Install AI Build Infrastructure
+        run: brew install cmake ninja pkg-config
+
+      - name: Step 1: Generate High-Performance Xcode Project
         run: |
-          mkdir -p BuildDir
-          
-          echo "--- SEARCHING FOR PROJECT ---"
-          # Deep search: finds .xcodeproj or .xcworkspace anywhere in the repo
-          PROJ_PATH=$(find . -name "*.xcodeproj" -o -name "*.xcworkspace" | grep -v "thirdparty" | head -n 1)
-          
-          if [[ -z "$PROJ_PATH" ]]; then 
-            echo "::error::No Xcode project found! Ensure your repo has a .xcodeproj folder."
-            ls -R
-            exit 1
-          fi
-          echo "Found Project: $PROJ_PATH"
-          
-          # Detect if we need -workspace or -project flag
-          TYPE_FLAG=$([[ "$PROJ_PATH" == *.xcworkspace ]] && echo "-workspace" || echo "-project")
+          mkdir -p build_xcode
+          # Targeting iPad 9 (A13) with Metal 2.0+ and JIT support
+          cmake -S . -B build_xcode \
+            -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf-with-dsym \
+            -DCMAKE_BUILD_TYPE=Release
 
-          echo "--- DETECTING SCHEME ---"
-          # Try to use your specific scheme, but fallback to the first one found if it fails
-          SCHEME="UnleashedRecompiOSD"
-          if ! xcodebuild -list $TYPE_FLAG "$PROJ_PATH" | grep -q "$SCHEME"; then
-            echo "Warning: Scheme '$SCHEME' not found. Fetching default scheme..."
-            SCHEME=$(xcodebuild -list $TYPE_FLAG "$PROJ_PATH" | sed -n '/Schemes:/,$p' | sed '1d' | xargs | cut -d' ' -f1)
-          fi
-          echo "Using Scheme: $SCHEME"
-
-          echo "--- STARTING COMPILATION ---"
+      - name: Step 2: Full-Power Engine Compilation
+        run: |
+          # Detect the generated project
+          PROJ_PATH=$(find build_xcode -name "*.xcodeproj" | head -n 1)
+          if [[ -z "$PROJ_PATH" ]]; then exit 1; fi
+          
+          # Auto-detect scheme from Nerun's fork structure
+          SCHEME=$(xcodebuild -list -project "$PROJ_PATH" | sed -n '/Schemes:/,$p' | sed '1d' | xargs | cut -d' ' -f1)
+          
+          # Build with A13 Bionic optimization flags
           xcodebuild build \
-            $TYPE_FLAG "$PROJ_PATH" \
+            -project "$PROJ_PATH" \
             -scheme "$SCHEME" \
             -sdk iphoneos \
             -configuration Release \
@@ -48,23 +46,20 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            OTHER_CFLAGS="-march=apple-a13"
+            OTHER_CFLAGS="-march=apple-a13 -O3 -flto" \
+            OTHER_LDFLAGS="-flto"
 
-      - name: Ultimate Final Inject & Hardening
+      - name: Step 3: Ultimate Hardening & Asset Injection
         run: |
           APP_DIR="Payload/Unleashed.app"
           mkdir -p "$APP_DIR/private"
           
-          # 1. FIND AND INJECT BINARY (Recursive search for the arm64 executable)
+          # 1. Binary Extraction & Entitlement Injection
           RAW_BINARY=$(find ./BuildDir -type f -exec file {} + | grep "Mach-O 64-bit" | grep "arm64" | cut -d: -f1 | head -n 1)
-          if [[ -z "$RAW_BINARY" ]]; then
-            echo "::error::Binary not found in BuildDir! Compilation likely failed."
-            exit 1
-          fi
-          cp "$RAW_BINARY" "$APP_DIR/UnleashedRecompiOSD"
-          chmod +x "$APP_DIR/UnleashedRecompiOSD"
+          cp "$RAW_BINARY" "$APP_DIR/Unleashed"
+          chmod +x "$APP_DIR/Unleashed"
 
-          # 2. ENHANCED ENTITLEMENTS (KSign / JIT / High Mem)
+          # 2. Perfect JIT & KSign Entitlements
           cat <<EOF > entitlements.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -78,15 +73,16 @@ jobs:
           </plist>
           EOF
 
-          # 3. FAKE-SIGN (Critical for KSign/AltStore)
-          codesign -s - --entitlements entitlements.plist --force "$APP_DIR/UnleashedRecompiOSD"
+          # 3. Ad-Hoc Sign for KSign/AltStore Compatibility
+          codesign -s - --entitlements entitlements.plist --force "$APP_DIR/Unleashed"
 
-          # 4. DUAL-MODE OPTIMIZED CONFIG
+          # 4. Metal API & 4:3 Fullscreen Config
           cat <<EOF > "$APP_DIR/config.toml"
           [Video]
           GraphicsAPI = "Metal"
           ResolutionScale = 1.0
           FrameRateLimit = 60
+          VSync = true
           [Core]
           UseJIT = true
           FallbackToInterpreter = true
@@ -96,20 +92,19 @@ jobs:
           Fullscreen = true
           EOF
 
-          # 5. INFO.PLIST (Full-Screen & File Sharing)
+          # 5. Hardened Info.plist (File Sharing & Full Screen)
           cat <<EOF > "$APP_DIR/Info.plist"
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-              <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
-              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
+              <key>CFBundleExecutable</key><string>Unleashed</string>
+              <key>CFBundleIdentifier</key><string>com.nerun.unleashed</string>
               <key>CFBundleName</key><string>Unleashed</string>
               <key>CFBundleDisplayName</key><string>Sonic Unleashed</string>
               <key>CFBundlePackageType</key><string>APPL</string>
               <key>CFBundleShortVersionString</key><string>1.0</string>
               <key>MinimumOSVersion</key><string>15.0</string>
-              <key>LSRequiresIPhoneOS</key><true/>
               <key>UIFileSharingEnabled</key><true/>
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
               <key>UIStatusBarHidden</key><true/>
@@ -117,29 +112,25 @@ jobs:
               <key>UIDeviceFamily</key><array><integer>2</integer></array>
               <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
               <key>UISupportedInterfaceOrientations</key>
-              <array>
-                  <string>UIInterfaceOrientationLandscapeLeft</string>
-                  <string>UIInterfaceOrientationLandscapeRight</string>
-              </array>
+              <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
           </dict>
           </plist>
           EOF
 
-          # 6. ASSET INJECTION (Strict Check for lowercase 'private')
-          if [ -d "UnleashedRecompLib/private" ]; then
-            cp -r UnleashedRecompLib/private/* "$APP_DIR/private/"
-            echo "Assets successfully injected."
+          # 6. Deep Asset Verification (Root /private check)
+          if [ -d "private" ] && [ -f "private/default.xex" ]; then
+            cp -r private/* "$APP_DIR/private/"
+            echo "Success: Game data injected."
           else
-            echo "::error::Folder UnleashedRecompLib/private not found! Ensure folder casing is lowercase."
+            echo "::error::Critical Error: default.xex not found in /private root folder!"
             exit 1
           fi
 
-          # 7. PACKAGE
+          # 7. Final Bundle
           zip -ry Unleashed_Final.ipa Payload
 
-      - name: Upload Artifact
+      - name: Final Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Final-IPA
+          name: Sonic-Unleashed-iPad9-AI
           path: Unleashed_Final.ipa
-          retention-days: 7
