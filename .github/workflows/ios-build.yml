@@ -13,8 +13,9 @@ jobs:
       - name: Build Engine
         run: |
           mkdir -p BuildDir
+          # Build specifically for the Nerun port scheme
           xcodebuild build \
-            -scheme "UnleashedRecomp" \
+            -scheme "UnleashedRecompiOSD" \
             -sdk iphoneos \
             -configuration Release \
             -derivedDataPath ./BuildDir \
@@ -27,17 +28,20 @@ jobs:
           # 1. SETUP CLEAN BUNDLE STRUCTURE
           mkdir -p Payload/Unleashed.app/private
 
-          # 2. FIND & VERIFY BINARY
+          # 2. FIND & VERIFY BINARY (Supports UnleashedRecompiOSD)
+          # Specifically looking for your project's Mach-O arm64 executable
           RAW_BINARY=$(find ./BuildDir -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
           if [ -z "$RAW_BINARY" ]; then
             RAW_BINARY=$(find . -type f -size +1M -perm +111 | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
           fi
-          if [ -z "$RAW_BINARY" ]; then echo "Binary not found!"; exit 1; fi
           
-          cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecomp
-          chmod +x Payload/Unleashed.app/UnleashedRecomp
+          if [ -z "$RAW_BINARY" ]; then echo "Error: Project binary not found!"; exit 1; fi
+          
+          # Move binary and ensure it has the correct project name for the Info.plist
+          cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecompiOSD
+          chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
 
-          # 3. OPTIMIZED CONFIG (Metal + iPad 9 Performance Tuning)
+          # 3. METAL CONFIG (A13 iPad 9 Optimization)
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
@@ -47,17 +51,17 @@ jobs:
 
           # 4. INJECT ASSETS
           if [ -d "UnleashedRecompLib/Private" ]; then
-            echo "Injecting Private Assets..."
+            echo "Injecting Private Assets into /private..."
             cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/private/
           fi
 
-          # 5. FULL IPAD & MEMORY OPTIMIZED INFO.PLIST
+          # 5. iPad 9 & MEMORY OPTIMIZED INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
           <plist version="1.0">
           <dict>
-              <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
+              <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
               <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
               <key>CFBundleName</key><string>Unleashed</string>
               <key>CFBundlePackageType</key><string>APPL</string>
