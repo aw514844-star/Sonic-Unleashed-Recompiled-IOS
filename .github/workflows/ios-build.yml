@@ -1,101 +1,90 @@
-name: Sonic Unleashed Final - IPAD 9 AI PRO
-on:
-  workflow_dispatch:
-  push:
+name: Sonic Unleashed Final - FIXED BUILD
+on: [workflow_dispatch, push]
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout Source
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0
 
-      - name: Install Hard Dependencies
+      - name: Build Engine
         run: |
-          brew install cmake ninja pkg-config freetype libpng zlib curl
-          brew link --force freetype libpng zlib curl
-
-      - name: Step 1: Generate Xcode Project
-        run: |
-          mkdir -p build_xcode
-          cmake -S . -B build_xcode \
-            -G Xcode \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
-            -DFREETYPE_INCLUDE_DIR_freetype2="/opt/homebrew/opt/freetype/include/freetype2" \
-            -DFREETYPE_LIBRARY="/opt/homebrew/opt/freetype/lib/libfreetype.dylib" \
-            -DPNG_LIBRARY="/opt/homebrew/opt/libpng/lib/libpng.dylib" \
-            -DPNG_PNG_INCLUDE_DIR="/opt/homebrew/opt/libpng/include" \
-            -DZLIB_LIBRARY="/opt/homebrew/opt/zlib/lib/libz.dylib" \
-            -DZLIB_INCLUDE_DIR="/opt/homebrew/opt/zlib/include" \
-            -DCURL_INCLUDE_DIR="/opt/homebrew/opt/curl/include" \
-            -DCURL_LIBRARY="/opt/homebrew/opt/curl/lib/libcurl.dylib" \
-            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
-            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
-            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
-
-      - name: Step 2: Compile Engine
-        run: |
-          PROJ_PATH=$(find build_xcode -name "*.xcodeproj" | head -n 1)
-          if [ -z "$PROJ_PATH" ]; then exit 1; fi
-          
-          # Auto-detect the primary build scheme
-          SCHEME=$(xcodebuild -list -project "$PROJ_PATH" | sed -n '/Schemes:/,$p' | sed '1d' | xargs | cut -d' ' -f1)
-          echo "Building with Scheme: $SCHEME"
-
+          mkdir -p BuildDir
+          # Force the build specifically for iOS Metal support
           xcodebuild build \
-            -project "$PROJ_PATH" \
-            -scheme "$SCHEME" \
+            -scheme "UnleashedRecompiOSD" \
             -sdk iphoneos \
             -configuration Release \
             -derivedDataPath ./BuildDir \
-            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            OTHER_CFLAGS="-march=apple-a13 -O3 -flto"
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      - name: Step 3: IPA Construction & Asset Injection
+      - name: Package IPA and Inject Assets
         run: |
-          APP_DIR="Payload/Unleashed.app"
-          mkdir -p "$APP_DIR/private"
+          # 1. Setup Structure
+          mkdir -p Payload/Unleashed.app/private
           
-          # Find the compiled ARM64 binary
-          RAW_BIN=$(find ./BuildDir -type f -exec file {} + | grep "Mach-O 64-bit" | grep "arm64" | cut -d: -f1 | head -n 1)
-          if [ -z "$RAW_BIN" ]; then echo "Binary not found!"; exit 1; fi
-          cp "$RAW_BIN" "$APP_DIR/Unleashed"
-          chmod +x "$APP_DIR/Unleashed"
-
-          # Create JIT and Memory Entitlements
-          printf '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>get-task-allow</key><true/><key>run-unsigned-code</key><true/><key>increased-memory-limit</key><true/><key>com.apple.developer.kernel.extended-virtual-addressing</key><true/></dict></plist>' > entitlements.plist
-          
-          # Sign the binary
-          codesign -s - --entitlements entitlements.plist --force "$APP_DIR/Unleashed"
-
-          # Generate internal config
-          printf '[Video]\nGraphicsAPI = "Metal"\nResolutionScale = 1.0\nFrameRateLimit = 60\n[Core]\nUseJIT = true\n' > "$APP_DIR/config.toml"
-
-          # Create Info.plist
-          printf '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Unleashed</string><key>CFBundleIdentifier</key><string>com.nerun.unleashed</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>MinimumOSVersion</key><string>15.0</string><key>UIFileSharingEnabled</key><true/><key>UIDeviceFamily</key><array><integer>2</integer></array><key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array></dict></plist>' > "$APP_DIR/Info.plist"
-
-          # Final Asset Handover
-          if [ -d "private" ]; then
-            cp -r private/* "$APP_DIR/private/"
-            echo "Assets successfully merged into IPA."
+          # 2. Extract Binary
+          # Locating the specific binary from the build folder
+          APP_PATH=$(find BuildDir -name "UnleashedRecompiOSD.app" -type d | head -n 1)
+          if [ -d "$APP_PATH" ]; then
+            cp -r "$APP_PATH/" Payload/Unleashed.app/
           else
-            echo "::warning:: No 'private' folder found. IPA will be a shell only."
+            echo "Binary folder not found! Searching for raw Mach-O..."
+            RAW_BINARY=$(find ./BuildDir -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "arm64" | cut -d: -f1 | head -n 1)
+            cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecompiOSD
           fi
+
+          # 3. Inject Assets (default.xex, shader.ar)
+          # Ensuring case sensitivity matches your folder structure
+          if [ -d "UnleashedRecompLib/private" ]; then
+            cp -v UnleashedRecompLib/private/* Payload/Unleashed.app/private/
+          elif [ -d "UnleashedRecompLib/Private" ]; then
+            cp -v UnleashedRecompLib/Private/* Payload/Unleashed.app/private/
+          fi
+
+          # 4. Config & iPad Optimization
+          # Force Metal and Full Screen support
+          cat <<EOF > Payload/Unleashed.app/config.toml
+          [Video]
+          GraphicsAPI = "Metal"
+          ResolutionScale = 1.0
+          FrameRateLimit = 60
+          FullScreen = true
+          EOF
+
+          # 5. Fixed Info.plist for iPad 9 (File Sharing + Full Screen)
+          cat <<EOF > Payload/Unleashed.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
+              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
+              <key>CFBundleName</key><string>Unleashed</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>MinimumOSVersion</key><string>15.0</string>
+              <key>UIFileSharingEnabled</key><true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+              <key>UILaunchStoryboardName</key><string>LaunchScreen</string>
+              <key>UIRequiresFullScreen</key><true/>
+              <key>UIDeviceFamily</key><array><integer>2</integer></array>
+              <key>UISupportedInterfaceOrientations</key>
+              <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+          </dict>
+          </plist>
+          EOF
 
           zip -ry Unleashed_Final.ipa Payload
 
-      - name: Step 4: Final Upload
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-iPad9-Build
+          name: Unleashed-iPad-Fixed
           path: Unleashed_Final.ipa
-          retention-days: 5
