@@ -22,7 +22,7 @@ jobs:
           
           TYPE_FLAG=$([[ "$PROJ_PATH" == *.xcworkspace ]] && echo "-workspace" || echo "-project")
           
-          # Build with optimizations for A13 (iPad 9)
+          # Optimized for A13 Bionic (iPad 9)
           xcodebuild build \
             $TYPE_FLAG "$PROJ_PATH" \
             -scheme "UnleashedRecompiOSD" \
@@ -42,6 +42,10 @@ jobs:
           
           # 1. FIND AND INJECT BINARY
           RAW_BINARY=$(find ./BuildDir -type f -exec file {} + | grep "Mach-O 64-bit" | grep "arm64" | cut -d: -f1 | head -n 1)
+          if [[ -z "$RAW_BINARY" ]]; then
+            echo "::error::Binary not found! Check your Scheme name."
+            exit 1
+          fi
           cp "$RAW_BINARY" "$APP_DIR/UnleashedRecompiOSD"
           chmod +x "$APP_DIR/UnleashedRecompiOSD"
 
@@ -64,7 +68,7 @@ jobs:
           # 3. FAKE-SIGN
           codesign -s - --entitlements entitlements.plist --force "$APP_DIR/UnleashedRecompiOSD"
 
-          # 4. DUAL-MODE OPTIMIZED CONFIG (JIT + Non-JIT Support)
+          # 4. DUAL-MODE OPTIMIZED CONFIG
           cat <<EOF > "$APP_DIR/config.toml"
           [Video]
           GraphicsAPI = "Metal"
@@ -74,14 +78,13 @@ jobs:
           [Core]
           UseJIT = true
           FallbackToInterpreter = true
-          SafeMode = false
           [Display]
           AspectRatio = "4:3"
           FitScreen = true
           Fullscreen = true
           EOF
 
-          # 5. INFO.PLIST (Full-Screen & File Sharing Enabled)
+          # 5. INFO.PLIST (Full-Screen & File Sharing)
           cat <<EOF > "$APP_DIR/Info.plist"
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -97,8 +100,8 @@ jobs:
               <key>LSRequiresIPhoneOS</key><true/>
               <key>UIFileSharingEnabled</key><true/>
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-              <key>UIViewControllerBasedStatusBarAppearance</key><false/>
               <key>UIStatusBarHidden</key><true/>
+              <key>UIViewControllerBasedStatusBarAppearance</key><false/>
               <key>UIDeviceFamily</key><array><integer>2</integer></array>
               <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
               <key>UISupportedInterfaceOrientations</key>
@@ -110,9 +113,13 @@ jobs:
           </plist>
           EOF
 
-          # 6. ASSET INJECTION
-          if [ -d "UnleashedRecompLib/Private" ]; then
-            cp -r UnleashedRecompLib/Private/* "$APP_DIR/private/"
+          # 6. TARGETED ASSET INJECTION (LOWERCASE FIX)
+          if [ -d "UnleashedRecompLib/private" ]; then
+            echo "Found assets in UnleashedRecompLib/private. Injecting..."
+            cp -r UnleashedRecompLib/private/* "$APP_DIR/private/"
+          else
+            echo "::error::Assets NOT found in UnleashedRecompLib/private! Check your folder casing."
+            exit 1
           fi
 
           # 7. PACKAGE
