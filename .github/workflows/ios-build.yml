@@ -1,4 +1,4 @@
-name: Sonic Unleashed Final - IPAD 9 OPTIMIZED
+name: Sonic Unleashed Final - IPAD 9 STABILITY PRO
 on: [workflow_dispatch, push]
 
 jobs:
@@ -16,39 +16,106 @@ jobs:
           PROJ_PATH=$(find . -maxdepth 3 \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) | grep -v "thirdparty" | head -n 1)
           
           if [[ -z "$PROJ_PATH" ]]; then 
-            echo "::error::No Xcode project or workspace found!"
+            echo "::error::No Xcode project found!"
             exit 1
           fi
           
-          if [[ "$PROJ_PATH" == *.xcworkspace ]]; then
-            TYPE_FLAG="-workspace"
-          else
-            TYPE_FLAG="-project"
-          fi
+          TYPE_FLAG=$([[ "$PROJ_PATH" == *.xcworkspace ]] && echo "-workspace" || echo "-project")
           
+          # Build with optimizations for A13 (iPad 9)
           xcodebuild build \
             $TYPE_FLAG "$PROJ_PATH" \
             -scheme "UnleashedRecompiOSD" \
             -sdk iphoneos \
             -configuration Release \
             -derivedDataPath ./BuildDir \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=YES \
             CODE_SIGNING_REQUIRED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            COMPILER_INDEX_STORE_ENABLE=NO
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            OTHER_CFLAGS="-march=apple-a13"
 
-      - name: Ultimate Final Inject
+      - name: Ultimate Final Inject & Hardening
         run: |
           APP_DIR="Payload/Unleashed.app"
           mkdir -p "$APP_DIR/private"
           
+          # 1. FIND AND INJECT BINARY
           RAW_BINARY=$(find ./BuildDir -type f -exec file {} + | grep "Mach-O 64-bit" | grep "arm64" | cut -d: -f1 | head -n 1)
-          
           cp "$RAW_BINARY" "$APP_DIR/UnleashedRecompiOSD"
           chmod +x "$APP_DIR/UnleashedRecompiOSD"
-          
-          # Config and Plist generation omitted for brevity but remain as you wrote them
-          
+
+          # 2. ENHANCED ENTITLEMENTS (KSign / JIT / High Mem)
+          cat <<EOF > entitlements.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>get-task-allow</key><true/>
+              <key>com.apple.developer.kernel.extended-virtual-addressing</key><true/>
+              <key>com.apple.developer.kernel.get-reboot-info</key><true/>
+              <key>com.apple.private.external-accessory.show-jpw</key><true/>
+              <key>run-unsigned-code</key><true/>
+              <key>increased-memory-limit</key><true/>
+          </dict>
+          </plist>
+          EOF
+
+          # 3. FAKE-SIGN
+          codesign -s - --entitlements entitlements.plist --force "$APP_DIR/UnleashedRecompiOSD"
+
+          # 4. DUAL-MODE OPTIMIZED CONFIG (JIT + Non-JIT Support)
+          cat <<EOF > "$APP_DIR/config.toml"
+          [Video]
+          GraphicsAPI = "Metal"
+          ResolutionScale = 1.0
+          FrameRateLimit = 60
+          VSync = true
+          [Core]
+          UseJIT = true
+          FallbackToInterpreter = true
+          SafeMode = false
+          [Display]
+          AspectRatio = "4:3"
+          FitScreen = true
+          Fullscreen = true
+          EOF
+
+          # 5. INFO.PLIST (Full-Screen & File Sharing Enabled)
+          cat <<EOF > "$APP_DIR/Info.plist"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
+              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
+              <key>CFBundleName</key><string>Unleashed</string>
+              <key>CFBundleDisplayName</key><string>Sonic Unleashed</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>MinimumOSVersion</key><string>15.0</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>UIFileSharingEnabled</key><true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+              <key>UIViewControllerBasedStatusBarAppearance</key><false/>
+              <key>UIStatusBarHidden</key><true/>
+              <key>UIDeviceFamily</key><array><integer>2</integer></array>
+              <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+          </dict>
+          </plist>
+          EOF
+
+          # 6. ASSET INJECTION
+          if [ -d "UnleashedRecompLib/Private" ]; then
+            cp -r UnleashedRecompLib/Private/* "$APP_DIR/private/"
+          fi
+
+          # 7. PACKAGE
           zip -ry Unleashed_Final.ipa Payload
 
       - name: Upload Artifact
@@ -56,3 +123,4 @@ jobs:
         with:
           name: Unleashed-Final-IPA
           path: Unleashed_Final.ipa
+          retention-days: 7
