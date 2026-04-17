@@ -5,17 +5,17 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout Source & Submodules
+      - name: Checkout Source
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install Build Infrastructure
+      - name: Install Dependencies
         run: |
           brew install cmake ninja pkg-config freetype libpng zlib
 
-      - name: Step 1: Generate Xcode Project
+      - name: Generate Xcode Project
         run: |
           mkdir -p build_xcode
           cmake -S . -B build_xcode \
@@ -26,98 +26,100 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_BUILD_TYPE=Release
 
-      - name: Step 2: Full-Power Engine Compilation
+      - name: Compile Engine
         run: |
           PROJ_PATH=$(find build_xcode -name "*.xcodeproj" | head -n 1)
           if [ -z "$PROJ_PATH" ]; then
-            echo "::error::Xcode project not found!"
+            echo "::error::Xcode project failed to generate!"
             exit 1
           fi
           
-          # Safely extract the scheme name
-          SCHEME_NAME=$(xcodebuild -list -project "$PROJ_PATH" | sed -n '/Schemes:/,$p' | sed '1d' | xargs | cut -d' ' -f1)
-          echo "Using Scheme: $SCHEME_NAME"
+          # Detect scheme with fallback logic
+          SCHEME=$(xcodebuild -list -project "$PROJ_PATH" | sed -n '/Schemes:/,$p' | sed '1d' | xargs | cut -d' ' -f1)
+          echo "Building Scheme: $SCHEME"
 
           xcodebuild build \
             -project "$PROJ_PATH" \
-            -scheme "$SCHEME_NAME" \
+            -scheme "$SCHEME" \
             -sdk iphoneos \
             -configuration Release \
             -derivedDataPath ./BuildDir \
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGNING_REQUIRED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            OTHER_CFLAGS="-march=apple-a13 -O3 -flto" \
-            OTHER_LDFLAGS="-flto"
+            OTHER_CFLAGS="-march=apple-a13 -O3 -flto"
 
-      - name: Step 3: Ultimate Hardening & Asset Injection
+      - name: Create IPA Package
         run: |
           APP_DIR="Payload/Unleashed.app"
           mkdir -p "$APP_DIR/private"
           
-          # Find binary
-          RAW_BINARY=$(find ./BuildDir -type f -exec file {} + | grep "Mach-O 64-bit" | grep "arm64" | cut -d: -f1 | head -n 1)
-          if [ -z "$RAW_BINARY" ]; then
-            echo "::error::Binary not found!"
-            exit 1
-          fi
-          cp "$RAW_BINARY" "$APP_DIR/Unleashed"
+          # Binary Extraction
+          RAW_BIN=$(find ./BuildDir -type f -exec file {} + | grep "Mach-O 64-bit" | grep "arm64" | cut -d: -f1 | head -n 1)
+          if [ -z "$RAW_BIN" ]; then exit 1; fi
+          cp "$RAW_BIN" "$APP_DIR/Unleashed"
           chmod +x "$APP_DIR/Unleashed"
 
-          # Write Entitlements file
-          printf '<?xml version="1.0" encoding="UTF-8"?>
+          # Configs (Using cat with quotes to protect against YAML parsing)
+          cat <<'EOF' > entitlements.plist
+          <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-              <key>get-task-allow</key><true/>
-              <key>com.apple.developer.kernel.extended-virtual-addressing</key><true/>
-              <key>run-unsigned-code</key><true/>
-              <key>increased-memory-limit</key><true/>
+            <key>get-task-allow</key><true/>
+            <key>com.apple.developer.kernel.extended-virtual-addressing</key><true/>
+            <key>run-unsigned-code</key><true/>
+            <key>increased-memory-limit</key><true/>
           </dict>
-          </plist>' > entitlements.plist
+          </plist>
+          EOF
 
-          # Apply Signature
           codesign -s - --entitlements entitlements.plist --force "$APP_DIR/Unleashed"
 
-          # Write Config.toml
-          printf '[Video]\nGraphicsAPI = "Metal"\nResolutionScale = 1.0\nFrameRateLimit = 60\n[Core]\nUseJIT = true\nFallbackToInterpreter = true\n[Display]\nAspectRatio = "4:3"\nFitScreen = true\nFullscreen = true\n' > "$APP_DIR/config.toml"
+          cat <<'EOF' > "$APP_DIR/config.toml"
+          [Video]
+          GraphicsAPI = "Metal"
+          ResolutionScale = 1.0
+          FrameRateLimit = 60
+          [Core]
+          UseJIT = true
+          [Display]
+          AspectRatio = "4:3"
+          Fullscreen = true
+          EOF
 
-          # Write Info.plist
-          printf '<?xml version="1.0" encoding="UTF-8"?>
+          cat <<'EOF' > "$APP_DIR/Info.plist"
+          <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-              <key>CFBundleExecutable</key><string>Unleashed</string>
-              <key>CFBundleIdentifier</key><string>com.nerun.unleashed</string>
-              <key>CFBundleName</key><string>Unleashed</string>
-              <key>CFBundleDisplayName</key><string>Sonic Unleashed</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>1.0</string>
-              <key>MinimumOSVersion</key><string>15.0</string>
-              <key>UIFileSharingEnabled</key><true/>
-              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-              <key>UIStatusBarHidden</key><true/>
-              <key>UIDeviceFamily</key><array><integer>2</integer></array>
-              <key>UISupportedInterfaceOrientations</key>
-              <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+            <key>CFBundleExecutable</key><string>Unleashed</string>
+            <key>CFBundleIdentifier</key><string>com.nerun.unleashed</string>
+            <key>CFBundleName</key><string>Unleashed</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
+            <key>MinimumOSVersion</key><string>15.0</string>
+            <key>UIFileSharingEnabled</key><true/>
+            <key>UIDeviceFamily</key><array><integer>2</integer></array>
+            <key>UISupportedInterfaceOrientations</key>
+            <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
           </dict>
-          </plist>' > "$APP_DIR/Info.plist"
+          </plist>
+          EOF
 
-          # Assets
+          # Inject Assets
           if [ -d "private" ]; then
             cp -r private/* "$APP_DIR/private/"
-            echo "Assets injected."
+            echo "Assets Injected."
           else
-            echo "::error::No private folder found!"
+            echo "::error::/private folder missing from root!"
             exit 1
           fi
 
           zip -ry Unleashed_Final.ipa Payload
 
-      - name: Final Upload
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: Sonic-Unleashed-iPad9-AI
           path: Unleashed_Final.ipa
-          retention-days: 7
