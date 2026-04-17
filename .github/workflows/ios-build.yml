@@ -1,28 +1,26 @@
-name: Sonic Unleashed
-
-on: [workflow_dispatch, push]
+name: Sonic Unleashed Recompiled
+on:
+  workflow_dispatch:
+  push:
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout Source & Hard-Reset Submodules
+      - name: Checkout Source
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Force Install Dependencies
+      - name: Install Dependencies
         run: |
           brew install cmake ninja pkg-config freetype libpng zlib
-          # Link them to ensure they are in the PATH
           brew link --force freetype libpng zlib
 
-      - name: Step 1: Generate Xcode Project (Hard-Path Injection)
+      - name: Generate Xcode Project
         run: |
           mkdir -p build_xcode
-          
-          # We explicitly define the library and include paths to bypass CMake's search engine
           cmake -S . -B build_xcode \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -40,14 +38,11 @@ jobs:
             -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
             -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
 
-      - name: Step 2: Full-Power Engine Compilation
+      - name: Compile Engine
         run: |
           PROJ_PATH=$(find build_xcode -name "*.xcodeproj" | head -n 1)
-          if [ -z "$PROJ_PATH" ]; then exit 1; fi
-          
-          # Detect scheme and force build
+          if [ -z "$PROJ_PATH" ]; then exit 1; f
           SCHEME=$(xcodebuild -list -project "$PROJ_PATH" | sed -n '/Schemes:/,$p' | sed '1d' | xargs | cut -d' ' -f1)
-          
           xcodebuild build \
             -project "$PROJ_PATH" \
             -scheme "$SCHEME" \
@@ -59,56 +54,18 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             OTHER_CFLAGS="-march=apple-a13 -O3 -flto"
 
-      - name: Step 3: IPA Packaging & "No-Crash" Config
+      - name: Create IPA Package
         run: |
           APP_DIR="Payload/Unleashed.app"
           mkdir -p "$APP_DIR/private"
-          
-          # Locate Binary
           RAW_BIN=$(find ./BuildDir -type f -exec file {} + | grep "Mach-O 64-bit" | grep "arm64" | cut -d: -f1 | head -n 1)
           cp "$RAW_BIN" "$APP_DIR/Unleashed"
           chmod +x "$APP_DIR/Unleashed"
-
-          # Sign for JIT and High Mem
-          cat <<'EOF' > entitlements.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-            <key>get-task-allow</key><true/>
-            <key>com.apple.developer.kernel.extended-virtual-addressing</key><true/>
-            <key>run-unsigned-code</key><true/>
-            <key>increased-memory-limit</key><true/>
-          </dict></plist>
-          EOF
+          printf '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>get-task-allow</key><true/><key>run-unsigned-code</key><true/><key>increased-memory-limit</key><true/></dict></plist>' > entitlements.plist
           codesign -s - --entitlements entitlements.plist --force "$APP_DIR/Unleashed"
-
-          # Info.plist for iPad 9
-          cat <<'EOF' > "$APP_DIR/Info.plist"
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-            <key>CFBundleExecutable</key><string>Unleashed</string>
-            <key>CFBundleIdentifier</key><string>com.nerun.unleashed</string>
-            <key>CFBundleName</key><string>Unleashed</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleShortVersionString</key><string>1.0</string>
-            <key>MinimumOSVersion</key><string>15.0</string>
-            <key>UIFileSharingEnabled</key><true/>
-            <key>UIDeviceFamily</key><array><integer>2</integer></array>
-            <key>UISupportedInterfaceOrientations</key>
-            <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
-          </dict></plist>
-          EOF
-
-          # Verify Asset Injection
-          if [ -d "private" ]; then
-            cp -r private/* "$APP_DIR/private/"
-            echo "Assets Injected."
-          else
-            echo "::error::Missing /private folder in repo!"
-            exit 1
-          fi
-
+          printf '[Video]\nGraphicsAPI = "Metal"\nResolutionScale = 1.0\nFrameRateLimit = 60\n[Core]\nUseJIT = true\n' > "$APP_DIR/config.toml"
+          printf '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Unleashed</string><key>CFBundleIdentifier</key><string>com.nerun.unleashed</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>MinimumOSVersion</key><string>15.0</string><key>UIFileSharingEnabled</key><true/><key>UIDeviceFamily</key><array><integer>2</integer></array><key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array></dict></plist>' > "$APP_DIR/Info.plist"
+          if [ -d "private" ]; then cp -r private/* "$APP_DIR/private/"; fi
           zip -ry Unleashed_Final.ipa Payload
 
       - name: Final Upload
