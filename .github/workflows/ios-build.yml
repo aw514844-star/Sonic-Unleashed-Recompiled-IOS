@@ -91,5 +91,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Recomp.ipa
-          path: Unleashed_Recomp.ipa
+          name: Unleashed-Final-IPA
+          path: Unleashed_Final.ipa
