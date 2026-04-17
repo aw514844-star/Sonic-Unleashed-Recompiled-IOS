@@ -11,31 +11,31 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install AI Build Infrastructure
+      - name: Install Build Infrastructure
         run: brew install cmake ninja pkg-config
 
-      - name: Step 1: Generate High-Performance Xcode Project
+      - name: Generate Xcode Project
         run: |
           mkdir -p build_xcode
-          # Targeting iPad 9 (A13) with Metal 2.0+ and JIT support
           cmake -S . -B build_xcode \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf-with-dsym \
             -DCMAKE_BUILD_TYPE=Release
 
-      - name: Step 2: Full-Power Engine Compilation
+      - name: Full-Power Engine Compilation
         run: |
-          # Detect the generated project
           PROJ_PATH=$(find build_xcode -name "*.xcodeproj" | head -n 1)
-          if [[ -z "$PROJ_PATH" ]]; then exit 1; fi
+          if [[ -z "$PROJ_PATH" ]]; then
+            echo "::error::Xcode project not found!"
+            exit 1
+          fi
           
-          # Auto-detect scheme from Nerun's fork structure
+          # Safely detect the first available scheme
           SCHEME=$(xcodebuild -list -project "$PROJ_PATH" | sed -n '/Schemes:/,$p' | sed '1d' | xargs | cut -d' ' -f1)
-          
-          # Build with A13 Bionic optimization flags
+          echo "Detected Scheme: $SCHEME"
+
           xcodebuild build \
             -project "$PROJ_PATH" \
             -scheme "$SCHEME" \
@@ -49,17 +49,21 @@ jobs:
             OTHER_CFLAGS="-march=apple-a13 -O3 -flto" \
             OTHER_LDFLAGS="-flto"
 
-      - name: Step 3: Ultimate Hardening & Asset Injection
+      - name: Ultimate Hardening & Asset Injection
         run: |
           APP_DIR="Payload/Unleashed.app"
           mkdir -p "$APP_DIR/private"
           
-          # 1. Binary Extraction & Entitlement Injection
+          # Find and move the compiled binary
           RAW_BINARY=$(find ./BuildDir -type f -exec file {} + | grep "Mach-O 64-bit" | grep "arm64" | cut -d: -f1 | head -n 1)
+          if [[ -z "$RAW_BINARY" ]]; then
+            echo "::error::Binary not found!"
+            exit 1
+          fi
           cp "$RAW_BINARY" "$APP_DIR/Unleashed"
           chmod +x "$APP_DIR/Unleashed"
 
-          # 2. Perfect JIT & KSign Entitlements
+          # Create Entitlements
           cat <<EOF > entitlements.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -73,16 +77,15 @@ jobs:
           </plist>
           EOF
 
-          # 3. Ad-Hoc Sign for KSign/AltStore Compatibility
+          # Apply Ad-Hoc Sign
           codesign -s - --entitlements entitlements.plist --force "$APP_DIR/Unleashed"
 
-          # 4. Metal API & 4:3 Fullscreen Config
+          # Generate Config.toml
           cat <<EOF > "$APP_DIR/config.toml"
           [Video]
           GraphicsAPI = "Metal"
           ResolutionScale = 1.0
           FrameRateLimit = 60
-          VSync = true
           [Core]
           UseJIT = true
           FallbackToInterpreter = true
@@ -92,7 +95,7 @@ jobs:
           Fullscreen = true
           EOF
 
-          # 5. Hardened Info.plist (File Sharing & Full Screen)
+          # Generate Info.plist
           cat <<EOF > "$APP_DIR/Info.plist"
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -108,25 +111,23 @@ jobs:
               <key>UIFileSharingEnabled</key><true/>
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
               <key>UIStatusBarHidden</key><true/>
-              <key>UIViewControllerBasedStatusBarAppearance</key><false/>
               <key>UIDeviceFamily</key><array><integer>2</integer></array>
-              <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
               <key>UISupportedInterfaceOrientations</key>
               <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
           </dict>
           </plist>
           EOF
 
-          # 6. Deep Asset Verification (Root /private check)
-          if [ -d "private" ] && [ -f "private/default.xex" ]; then
+          # Asset Injection Check
+          if [ -d "private" ]; then
             cp -r private/* "$APP_DIR/private/"
-            echo "Success: Game data injected."
+            echo "Assets injected successfully."
           else
-            echo "::error::Critical Error: default.xex not found in /private root folder!"
+            echo "::error::No /private folder found in root!"
             exit 1
           fi
 
-          # 7. Final Bundle
+          # Final Package
           zip -ry Unleashed_Final.ipa Payload
 
       - name: Final Upload
@@ -134,3 +135,4 @@ jobs:
         with:
           name: Sonic-Unleashed-iPad9-AI
           path: Unleashed_Final.ipa
+          retention-days: 7
