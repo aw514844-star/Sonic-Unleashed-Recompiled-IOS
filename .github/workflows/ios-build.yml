@@ -1,4 +1,4 @@
-name: Sonic Unleashed Recompiled
+name: Sonic Unleashed Final - IPAD 9 AI PRO
 on:
   workflow_dispatch:
   push:
@@ -13,12 +13,12 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install Dependencies
+      - name: Install Hard Dependencies
         run: |
-          brew install cmake ninja pkg-config freetype libpng zlib
-          brew link --force freetype libpng zlib
+          brew install cmake ninja pkg-config freetype libpng zlib curl
+          brew link --force freetype libpng zlib curl
 
-      - name: Generate Xcode Project
+      - name: Step 1: Generate Xcode Project
         run: |
           mkdir -p build_xcode
           cmake -S . -B build_xcode \
@@ -27,22 +27,28 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_BUILD_TYPE=Release \
+            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
             -DFREETYPE_INCLUDE_DIR_freetype2="/opt/homebrew/opt/freetype/include/freetype2" \
-            -DFREETYPE_INCLUDE_DIR_config="/opt/homebrew/opt/freetype/include/freetype2" \
             -DFREETYPE_LIBRARY="/opt/homebrew/opt/freetype/lib/libfreetype.dylib" \
             -DPNG_LIBRARY="/opt/homebrew/opt/libpng/lib/libpng.dylib" \
             -DPNG_PNG_INCLUDE_DIR="/opt/homebrew/opt/libpng/include" \
             -DZLIB_LIBRARY="/opt/homebrew/opt/zlib/lib/libz.dylib" \
             -DZLIB_INCLUDE_DIR="/opt/homebrew/opt/zlib/include" \
+            -DCURL_INCLUDE_DIR="/opt/homebrew/opt/curl/include" \
+            -DCURL_LIBRARY="/opt/homebrew/opt/curl/lib/libcurl.dylib" \
             -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
             -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
             -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
 
-      - name: Compile Engine
+      - name: Step 2: Compile Engine
         run: |
           PROJ_PATH=$(find build_xcode -name "*.xcodeproj" | head -n 1)
-          if [ -z "$PROJ_PATH" ]; then exit 1; f
+          if [ -z "$PROJ_PATH" ]; then exit 1; fi
+          
+          # Auto-detect the primary build scheme
           SCHEME=$(xcodebuild -list -project "$PROJ_PATH" | sed -n '/Schemes:/,$p' | sed '1d' | xargs | cut -d' ' -f1)
+          echo "Building with Scheme: $SCHEME"
+
           xcodebuild build \
             -project "$PROJ_PATH" \
             -scheme "$SCHEME" \
@@ -54,22 +60,42 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             OTHER_CFLAGS="-march=apple-a13 -O3 -flto"
 
-      - name: Create IPA Package
+      - name: Step 3: IPA Construction & Asset Injection
         run: |
           APP_DIR="Payload/Unleashed.app"
           mkdir -p "$APP_DIR/private"
+          
+          # Find the compiled ARM64 binary
           RAW_BIN=$(find ./BuildDir -type f -exec file {} + | grep "Mach-O 64-bit" | grep "arm64" | cut -d: -f1 | head -n 1)
+          if [ -z "$RAW_BIN" ]; then echo "Binary not found!"; exit 1; fi
           cp "$RAW_BIN" "$APP_DIR/Unleashed"
           chmod +x "$APP_DIR/Unleashed"
-          printf '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>get-task-allow</key><true/><key>run-unsigned-code</key><true/><key>increased-memory-limit</key><true/></dict></plist>' > entitlements.plist
+
+          # Create JIT and Memory Entitlements
+          printf '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>get-task-allow</key><true/><key>run-unsigned-code</key><true/><key>increased-memory-limit</key><true/><key>com.apple.developer.kernel.extended-virtual-addressing</key><true/></dict></plist>' > entitlements.plist
+          
+          # Sign the binary
           codesign -s - --entitlements entitlements.plist --force "$APP_DIR/Unleashed"
+
+          # Generate internal config
           printf '[Video]\nGraphicsAPI = "Metal"\nResolutionScale = 1.0\nFrameRateLimit = 60\n[Core]\nUseJIT = true\n' > "$APP_DIR/config.toml"
+
+          # Create Info.plist
           printf '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Unleashed</string><key>CFBundleIdentifier</key><string>com.nerun.unleashed</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.0</string><key>MinimumOSVersion</key><string>15.0</string><key>UIFileSharingEnabled</key><true/><key>UIDeviceFamily</key><array><integer>2</integer></array><key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array></dict></plist>' > "$APP_DIR/Info.plist"
-          if [ -d "private" ]; then cp -r private/* "$APP_DIR/private/"; fi
+
+          # Final Asset Handover
+          if [ -d "private" ]; then
+            cp -r private/* "$APP_DIR/private/"
+            echo "Assets successfully merged into IPA."
+          else
+            echo "::warning:: No 'private' folder found. IPA will be a shell only."
+          fi
+
           zip -ry Unleashed_Final.ipa Payload
 
-      - name: Final Upload
+      - name: Step 4: Final Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Sonic-Unleashed-Final-IPA
+          name: Sonic-Unleashed-iPad9-Build
           path: Unleashed_Final.ipa
+          retention-days: 5
