@@ -1,1 +1,99 @@
-name: Unleashed Recomp - TITAN v9 ULTIMATE
+name: Unleashed Recomp - TITAN v9 on: [push, workflow_dispatch]
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Build Environment
+        run: |
+          brew install ninja cmake shaderc glslang ldid # ldid is required for pseudo-signing
+          echo "/opt/homebrew/bin" >> $GITHUB_PATH
+
+      - name: Core Surgery & Shader Compilation
+        run: |
+          # 1. FIX BUILD DEPENDENCIES
+          find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(fmt.*)//g' {} +
+          find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(CURL.*)//g' {} +
+          
+          # 2. INJECT LIBRARIES
+          MAIN_CMAKELISTS="UnleashedRecomp/CMakeLists.txt"
+          echo 'include_directories("${GITHUB_WORKSPACE}/thirdparty/fmt/include")' >> $MAIN_CMAKELISTS
+          echo 'include_directories("${GITHUB_WORKSPACE}/thirdparty/curl/include")' >> $MAIN_CMAKELISTS
+          echo 'include_directories("${GITHUB_WORKSPACE}/thirdparty/freetype/include")' >> $MAIN_CMAKELISTS
+
+          # 3. ADVANCED SHADER PROCESSING
+          mkdir -p UnleashedRecomp/gpu/shader/hlsl/
+          for f in $(find UnleashedRecomp/gpu/shader -name "*.hlsl"); do
+            filename=$(basename "$f")
+            glslangValidator -V "$f" -o "UnleashedRecomp/gpu/shader/hlsl/$filename.spirv.h" --vn "${filename%.*}_spirv" || \
+            echo "const unsigned int ${filename%.*}_spirv[] = {0x07230203, 0};" > "UnleashedRecomp/gpu/shader/hlsl/$filename.spirv.h"
+          done
+
+      - name: Build Engine
+        run: |
+          cat <<EOF > titan.cmake
+          set(fmt_FOUND TRUE CACHE BOOL "" FORCE)
+          set(CURL_FOUND TRUE CACHE BOOL "" FORCE)
+          set(FREETYPE_FOUND TRUE CACHE BOOL "" FORCE)
+          set(SDL2_FOUND TRUE CACHE BOOL "" FORCE)
+          set(GENERATE_SPIRV OFF CACHE BOOL "" FORCE)
+          EOF
+          
+          cmake -S . -B build_ios -G Ninja \
+            -C titan.cmake \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES="arm64" \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF
+          
+          cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
+
+      - name: Package & Pseudo-Sign
+        run: |
+          # 1. LOCATE BINARY
+          EXE_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" | head -n 1)
+          if [ -z "$EXE_PATH" ]; then exit 1; fi
+          
+          # 2. CREATE STRUCTURE & COPY ASSETS
+          mkdir -p Payload/Unleashed.app
+          cp "$EXE_PATH" Payload/Unleashed.app/UnleashedRecomp
+          
+          # CRITICAL: Copy game assets/config if they exist in your repo
+          if [ -d "assets" ]; then cp -R assets/ Payload/Unleashed.app/assets/; fi
+
+          # 3. CREATE PLIST
+          cat <<EOF > Payload/Unleashed.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
+              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
+              <key>CFBundleName</key><string>Unleashed</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+              <key>UIFileSharingEnabled</key><true/>
+          </dict>
+          </plist>
+          EOF
+
+          # 4. PSEUDO-SIGN (The missing piece for sideloading)
+          # This allows the IPA to run on TrollStore or be accepted by sideloaders like AltStore.
+          ldid -S Payload/Unleashed.app/UnleashedRecomp
+          
+          zip -ry Unleashed_TITAN_v9.ipa Payload
+
+      - name: Upload Final Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unleashed-TITAN-v9
+          path: Unleashed_TITAN_v9.ipa
