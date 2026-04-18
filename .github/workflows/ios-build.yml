@@ -1,4 +1,4 @@
-name: Unleashed Recomp - Titan v10
+name: Unleashed Recomp - Titan v10.1
 on: [push, workflow_dispatch]
 
 jobs:
@@ -14,97 +14,20 @@ jobs:
       - name: Setup Build Environment
         run: |
           brew install ninja cmake shaderc glslang
-          echo "/opt/homebrew/bin" >> $GITHUB_PATH
+          # Add Homebrew to path specifically for Intel/Apple Silicon runners
+          echo "/opt/homebrew/bin:/usr/local/bin" >> $GITHUB_PATH
 
-      - name: Total Lockdown Surgery
+      - name: Configure and Build
         run: |
-          # 1. DELETE FIND_PACKAGE CALLS
-          # Using a simpler sed pattern that works reliably on macOS
-          find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(.*)//g' {} +
-
-          # 2. GLOBAL INJECTION
-          # Fixed the space in GITHUB_WORKSPACE and ensured paths are absolute
-          find . -name "CMakeLists.txt" -exec sh -c "
-            echo 'include_directories(\"${GITHUB_WORKSPACE}/thirdparty/fmt/include\")' >> \$1
-            echo 'include_directories(\"${GITHUB_WORKSPACE}/thirdparty/curl/include\")' >> \$1
-            echo 'include_directories(\"${GITHUB_WORKSPACE}/thirdparty/freetype/include\")' >> \$1
-            echo 'include_directories(\"${GITHUB_WORKSPACE}/thirdparty/SDL/include\")' >> \$1
-            echo 'link_libraries(\"${GITHUB_WORKSPACE}/thirdparty/curl/libcurl.a\")' >> \$1
-            echo 'link_libraries(\"${GITHUB_WORKSPACE}/thirdparty/freetype/libfreetype.a\")' >> \$1
-            echo 'add_compile_options(-Wno-error=everything -Wno-all -w)' >> \$1
-          " _ {} \;
-
-      - name: Shader Generation
-        run: |
-          mkdir -p UnleashedRecomp/gpu/shader/hlsl/
-          # Ensure we don't crash if no hlsl files are found
-          shopt -s globstar
-          for f in UnleashedRecomp/gpu/shader/**/*.hlsl; do
-            [ -e "$f" ] || continue
-            filename=$(basename "$f")
-            glslangValidator -V "$f" -o "UnleashedRecomp/gpu/shader/hlsl/$filename.spirv.h" --vn "${filename%.*}_spirv" || \
-            echo "const unsigned int ${filename%.*}_spirv[] = {0x07230203, 0};" > "UnleashedRecomp/gpu/shader/hlsl/$filename.spirv.h"
-          done
-
-      - name: Build Engine
-        run: |
-          rm -rf build_ios
-          cat <<EOF > titan.cmake
-          set(fmt_FOUND TRUE CACHE BOOL "" FORCE)
-          set(CURL_FOUND TRUE CACHE BOOL "" FORCE)
-          set(FREETYPE_FOUND TRUE CACHE BOOL "" FORCE)
-          set(ZLIB_FOUND TRUE CACHE BOOL "" FORCE)
-          set(SDL2_FOUND TRUE CACHE BOOL "" FORCE)
-          set(GENERATE_SPIRV OFF CACHE BOOL "" FORCE)
-          EOF
-
-          cmake -S . -B build_ios -G Ninja \
-            -C titan.cmake \
+          mkdir build
+          cmake -S . -B build \
+            -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_ARCHITECTURES="arm64" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DENABLE_JIT=ON \
-            -DOPTIMIZE_FOR_A13=ON \
-            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
-            -DUSE_INTERNAL_FMT=ON
+            -DCMAKE_INSTALL_PREFIX=./install \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DENABLE_BITCODE=OFF
           
-          cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
-
-      - name: Verification & IPA Creation
-        run: |
-          # Find the actual app bundle or executable
-          EXE_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -path "*/.*" | head -n 1)
-          
-          if [ -z "$EXE_PATH" ]; then
-            echo "❌ TITAN CRASH: No binary was built."
-            exit 1
-          fi
-
-          mkdir -p Payload/Unleashed.app
-          cp "$EXE_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
-          
-          cat <<EOF > Payload/Unleashed.app/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
-            <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
-            <key>CFBundleName</key><string>Unleashed</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleShortVersionString</key><string>1.0</string>
-            <key>LSRequiresIPhoneOS</key><true/>
-            <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
-            <key>UIFileSharingEnabled</key><true/>
-          </dict>
-          </plist>
-          EOF
-          
-          zip -ry Unleashed_V10.ipa Payload
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Unleashed-Final-Titan-10
-          path: Unleashed_V10.ipa
+          cmake --build build --config Release
