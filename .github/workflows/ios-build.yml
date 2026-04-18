@@ -1,4 +1,4 @@
-name: Sonic Unleashed - OMEGA v5
+name: Sonic Unleashed - OMEGA v6
 on: [workflow_dispatch, push]
 
 jobs:
@@ -11,21 +11,23 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Hardened Dependencies
+      - name: Install All Final Dependencies
         run: |
-          # Adding fmt to the list
-          brew install cmake ninja pkg-config freetype libpng zlib curl openssl@3 fmt
+          # Adding SDL2 and GLM - the last two pieces of the puzzle
+          brew install cmake ninja pkg-config freetype libpng zlib curl openssl@3 fmt sdl2 glm
           echo "/opt/homebrew/bin:/usr/local/bin" >> $GITHUB_PATH
           sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
 
-      - name: Generate & Build (Metal/iOS/Hardened)
+      - name: Generate & Build (Metal/iOS/Titan)
         run: |
           mkdir -p build_ios
+          # Map every single path to avoid "Not Found" errors
           export FT_PATH=$(brew --prefix freetype)
           export PNG_PATH=$(brew --prefix libpng)
           export CURL_PATH=$(brew --prefix curl)
           export SSL_PATH=$(brew --prefix openssl@3)
           export FMT_PATH=$(brew --prefix fmt)
+          export SDL2_PATH=$(brew --prefix sdl2)
           
           cmake -S . -B build_ios \
             -G Xcode \
@@ -37,7 +39,6 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
             -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO \
             -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
-            -DMSDF_ATLAS_GEN_BUILD_STANDALONE=OFF \
             -DFREETYPE_INCLUDE_DIRS="$FT_PATH/include/freetype2" \
             -DFREETYPE_LIBRARY="$FT_PATH/lib/libfreetype.a" \
             -DFREETYPE_FOUND=TRUE \
@@ -48,24 +49,27 @@ jobs:
             -DCURL_LIBRARY="$CURL_PATH/lib/libcurl.a" \
             -DCURL_FOUND=TRUE \
             -Dfmt_DIR="$FMT_PATH/lib/cmake/fmt" \
+            -DSDL2_DIR="$SDL2_PATH/lib/cmake/SDL2" \
             -DOPENSSL_ROOT_DIR="$SSL_PATH" \
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
-            -DZLIB_ROOT=$(brew --prefix zlib) \
-            -DMSDFGEN_USE_VCPKG=OFF \
-            -DMSDFGEN_BUILD_STANDALONE=OFF \
             -DSDL_STATIC=ON \
             -DSDL_METAL=ON
 
+          # The full engine build
           cmake --build build_ios --config Release --target UnleashedRecompiOSD -- -sdk iphoneos
 
       - name: Construct Verified IPA
         run: |
           rm -rf Payload Unleashed_Final.ipa
           mkdir -p Payload/Unleashed.app/private
+          
+          # Locating the compiled app
           BUILT_APP=$(find build_ios -name "UnleashedRecompiOSD.app" -type d | grep "Release-iphoneos" | head -n 1)
           if [ -z "$BUILT_APP" ]; then BUILT_APP=$(find build_ios -name "*.app" -type d | head -n 1); fi
+          
           cp -a "$BUILT_APP/" Payload/Unleashed.app/
           
+          # Inject Metal Configuration
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
@@ -74,11 +78,38 @@ jobs:
           FullScreen = true
           EOF
 
-          # Info.plist omitted for brevity, keep the one from v4!
+          # Info.plist for iPad & Gamepads
+          cat <<EOF > Payload/Unleashed.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
+              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
+              <key>CFBundleName</key><string>Unleashed</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>MinimumOSVersion</key><string>15.0</string>
+              <key>UIFileSharingEnabled</key><true/>
+              <key>UIRequiresFullScreen</key><true/>
+              <key>UIDeviceFamily</key><array><integer>2</integer></array>
+              <key>GCSupportedGameControllers</key>
+              <array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+          </dict>
+          </plist>
+          EOF
+
+          chmod -R 755 Payload/Unleashed.app/
           zip -ry Unleashed_Final.ipa Payload
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad-v5
+          name: Unleashed-iPad-OMEGA-v6
           path: Unleashed_Final.ipa
