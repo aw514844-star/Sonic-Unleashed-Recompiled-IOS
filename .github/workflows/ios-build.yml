@@ -1,4 +1,4 @@
-name: Unleashed Recomp - The Finals
+name: Unleashed Recomp - The Final OMEGA v10
 on: [push, workflow_dispatch]
 
 jobs:
@@ -11,12 +11,14 @@ jobs:
           submodules: recursive
 
       - name: Setup Build Environment
-        run: brew install ninja cmake shaderc glslang
+        run: |
+          brew install ninja cmake shaderc glslang freetype fmt sdl2 curl
+          echo "BREW_PATH=$(brew --prefix)" >> $GITHUB_ENV
 
-      - name: Build Engine (The 321st Try - fmt Fix)
+      - name: Build Engine (The "First Try" Fix)
         run: |
           rm -rf build_ios
-          # Bypassing the last package hurdle by pointing directly to the internal fmt folder
+          # We manually set paths to Brew's ARM64 libraries to ensure no "Not Found" errors
           cmake -S . -B build_ios -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
@@ -27,22 +29,17 @@ jobs:
             -DOPTIMIZE_FOR_A13=ON \
             -DCONTROLLER_PS4=ON \
             -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
-            -DUSE_INTERNAL_FMT=ON \
-            -DMSDFGEN_USE_FREETYPE=OFF \
-            -DMSDFGEN_BUILD_STANDALONE=OFF \
-            -DFETCHCONTENT_FULLY_DISCONNECTED=OFF \
-            -DENABLE_NETWORKING=ON \
-            -DCURL_INCLUDE_DIR="${GITHUB_WORKSPACE}/thirdparty/curl/include" \
-            -DCURL_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
-            -DFREETYPE_INCLUDE_DIR_ft2build="${GITHUB_WORKSPACE}" \
-            -DFREETYPE_INCLUDE_DIRS="${GITHUB_WORKSPACE}" \
-            -DFREETYPE_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
-            -DFREETYPE_LIBRARIES="${GITHUB_WORKSPACE}/CMakeLists.txt" \
-            -Dfmt_DIR="${GITHUB_WORKSPACE}/thirdparty/fmt"
-          
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DUSE_INTERNAL_FMT=OFF \
+            -DMSDFGEN_USE_FREETYPE=ON \
+            -DCMAKE_PREFIX_PATH="${{ env.BREW_PATH }}" \
+            -Dfmt_DIR="${{ env.BREW_PATH }}/lib/cmake/fmt" \
+            -DSDL2_DIR="${{ env.BREW_PATH }}/lib/cmake/SDL2"
+
           cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
-      - name: Construct Verified IPA (Full Injection)
+      - name: Construct Verified IPA (iPad 9 / A13 Edition)
         run: |
           rm -rf Payload Unleashed_Finals.ipa
           mkdir -p Payload/Unleashed.app
@@ -51,19 +48,19 @@ jobs:
           BINARY_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" | grep -i "Unleashed" | xargs du -a | sort -n -r | head -n 1 | awk '{print $2}')
           
           if [ -z "$BINARY_PATH" ]; then
-            echo "❌ ERROR: Compilation failed, no binary found."
+            echo "❌ ERROR: Compilation failed. No binary found in build_ios."
             exit 1
           fi
           
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
           
-          # 2. INJECT PRIVATE DATA FROM YOUR FORK
+          # 2. INJECT PRIVATE DATA (Verified Paths)
           echo "📥 Injecting assets from UnleashedRecompLib/private..."
-          cp UnleashedRecompLib/private/default.xex Payload/Unleashed.app/ 2>/dev/null || true
-          cp UnleashedRecompLib/private/default.xexp Payload/Unleashed.app/ 2>/dev/null || true
-          cp UnleashedRecompLib/private/shader.ar Payload/Unleashed.app/ 2>/dev/null || true
-
-          # 3. IPAD 9 (A13) OPTIMIZED CONFIG
+          cp UnleashedRecompLib/private/default.xex Payload/Unleashed.app/ || echo "⚠️ Warning: default.xex missing!"
+          cp UnleashedRecompLib/private/default.xexp Payload/Unleashed.app/ || echo "⚠️ Warning: default.xexp missing!"
+          cp UnleashedRecompLib/private/shader.ar Payload/Unleashed.app/ || echo "⚠️ Warning: shader.ar missing!"
+          
+          # 3. IPAD 9 OPTIMIZED CONFIG
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
@@ -71,16 +68,18 @@ jobs:
           FrameRateLimit = 60
           FullScreen = true
           AspectRatio = "4:3"
+          
           [Input]
           ControllerEnabled = true
           GamepadType = "DualShock4"
+          
           [Core]
-          JIT_Mode = "Hybrid" 
+          JIT_Mode = "Hybrid"
           SafeMode = true
           DataPath = "./"
           EOF
-
-          # 4. FINALIZED INFO.PLIST
+          
+          # 4. FINALIZED INFO.PLIST (Enables Files App Access)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -95,8 +94,8 @@ jobs:
               <key>MinimumOSVersion</key><string>15.0</string>
               <key>UIDeviceFamily</key><array><integer>2</integer></array>
               <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
-              <key>UIRequiresFullScreen</key><true/>
-              <key>UIStatusBarHidden</key><true/>
+              <key>UIFileSharingEnabled</key><true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
               <key>UISupportedInterfaceOrientations</key>
               <array>
                   <string>UIInterfaceOrientationLandscapeLeft</string>
@@ -105,16 +104,16 @@ jobs:
           </dict>
           </plist>
           EOF
-
-          # 5. SEAL THE IPA
+          
+          # 5. SEAL THE IPA (UNSIGNED)
           chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
           chmod -R 755 Payload/Unleashed.app/
           zip -ry Unleashed_Finals.ipa Payload
           
-          echo "✅ THE FINALS: IPA Created Successfully."
+          echo "✅ BUILD COMPLETE: IPA generated for iPad 9."
 
-      - name: Upload Final Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-The-Finals-iPad9
+          name: Unleashed-iPad9-PS4Ready
           path: Unleashed_Finals.ipa
