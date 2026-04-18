@@ -13,10 +13,10 @@ jobs:
       - name: Setup Build Environment
         run: brew install ninja cmake shaderc glslang
 
-      - name: Build Engine (The Plural Path Fix)
+      - name: Build Engine (The 321st Try - fmt Fix)
         run: |
           rm -rf build_ios
-          # Fixing the 'Missing FREETYPE_INCLUDE_DIRS' error by faking plural variables
+          # Bypassing the last package hurdle by pointing directly to the internal fmt folder
           cmake -S . -B build_ios -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
@@ -37,7 +37,8 @@ jobs:
             -DFREETYPE_INCLUDE_DIR_ft2build="${GITHUB_WORKSPACE}" \
             -DFREETYPE_INCLUDE_DIRS="${GITHUB_WORKSPACE}" \
             -DFREETYPE_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
-            -DFREETYPE_LIBRARIES="${GITHUB_WORKSPACE}/CMakeLists.txt"
+            -DFREETYPE_LIBRARIES="${GITHUB_WORKSPACE}/CMakeLists.txt" \
+            -Dfmt_DIR="${GITHUB_WORKSPACE}/thirdparty/fmt"
           
           cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
@@ -62,7 +63,7 @@ jobs:
           cp UnleashedRecompLib/private/default.xexp Payload/Unleashed.app/ 2>/dev/null || true
           cp UnleashedRecompLib/private/shader.ar Payload/Unleashed.app/ 2>/dev/null || true
 
-          # 3. IPAD 9 OPTIMIZED CONFIG
+          # 3. IPAD 9 (A13) OPTIMIZED CONFIG
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
