@@ -1,4 +1,4 @@
-name: Unleashed Recomp IOS - OMEGA v14 (The Finisher)
+name: Unleashed Recomp - OMEGA v14 (The Finisher)
 on: [push, workflow_dispatch]
 
 jobs:
@@ -49,7 +49,6 @@ jobs:
           rm -rf Payload Unleashed_Finals.ipa
           mkdir -p Payload/Unleashed.app
           
-          # Find the binary
           BINARY_PATH=$(find build_ios -name "Unleashed*" -type f -perm +111 | head -n 1)
           if [ -z "$BINARY_PATH" ]; then
             echo "❌ ERROR: Compilation failed."
@@ -57,11 +56,8 @@ jobs:
           fi
           
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
-          
-          # Assets
           cp UnleashedRecompLib/private/* Payload/Unleashed.app/ 2>/dev/null || true
           
-          # Config
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
@@ -72,6 +68,26 @@ jobs:
           DataPath = "./"
           EOF
           
-          # Plist
           cat <<EOF > Payload/Unleashed.app/Info.plist
-          <?xml version="1.0" encoding="UTF-
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
+            <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
+            <key>CFBundleName</key><string>Unleashed</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSRequiresIPhoneOS</key><true/>
+            <key>UIDeviceFamily</key><array><integer>2</integer></array>
+            <key>UIFileSharingEnabled</key><true/>
+            <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+          </dict></plist>
+          EOF
+          
+          chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
+          zip -ry Unleashed_Finals.ipa Payload
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unleashed-The-Final-IPA
+          path: Unleashed_Finals.ipa
