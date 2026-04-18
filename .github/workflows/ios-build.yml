@@ -1,4 +1,4 @@
-name: Unleashed Recomp - OMEGA v13 (THE FINISHER)
+name: Unleashed Recomp IOS - OMEGA v14 (The Finisher)
 on: [push, workflow_dispatch]
 
 jobs:
@@ -13,7 +13,7 @@ jobs:
       - name: Setup Build Environment
         run: brew install ninja cmake shaderc glslang
 
-      - name: Build Engine (Force-Skipping fmt Search)
+      - name: Build Engine (Fixing Shaders & fmt)
         run: |
           rm -rf build_ios
           cmake -S . -B build_ios -G Ninja \
@@ -27,9 +27,7 @@ jobs:
             -DCONTROLLER_PS4=ON \
             -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
             -DUSE_INTERNAL_FMT=ON \
-            -Dfmt_FOUND=TRUE \
-            -Dfmt_DIR="${GITHUB_WORKSPACE}/thirdparty/fmt" \
-            -DCMAKE_DISABLE_FIND_PACKAGE_fmt=ON \
+            -DGENERATE_SPIRV=ON \
             -DMSDFGEN_USE_FREETYPE=OFF \
             -DMSDFGEN_BUILD_STANDALONE=OFF \
             -DENABLE_NETWORKING=ON \
@@ -39,6 +37,7 @@ jobs:
             -DFREETYPE_INCLUDE_DIRS="${GITHUB_WORKSPACE}" \
             -DFREETYPE_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
             -DFREETYPE_LIBRARIES="${GITHUB_WORKSPACE}/CMakeLists.txt" \
+            -Dfmt_DIR="${GITHUB_WORKSPACE}/thirdparty/fmt" \
             -DSDL2_INCLUDE_DIR="${GITHUB_WORKSPACE}/thirdparty/SDL/include" \
             -DSDL2_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
             -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/thirdparty/fmt"
@@ -50,53 +49,29 @@ jobs:
           rm -rf Payload Unleashed_Finals.ipa
           mkdir -p Payload/Unleashed.app
           
-          # Find the compiled binary
+          # Find the binary
           BINARY_PATH=$(find build_ios -name "Unleashed*" -type f -perm +111 | head -n 1)
           if [ -z "$BINARY_PATH" ]; then
-            echo "❌ ERROR: Compilation failed. No binary found."
+            echo "❌ ERROR: Compilation failed."
             exit 1
           fi
           
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
           
-          # Inject Private Assets
+          # Assets
           cp UnleashedRecompLib/private/* Payload/Unleashed.app/ 2>/dev/null || true
           
-          # Optimized Config
+          # Config
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
           ResolutionScale = 1.0
           AspectRatio = "4:3"
-          [Input]
-          GamepadType = "DualShock4"
           [Core]
           JIT_Mode = "Hybrid"
           DataPath = "./"
           EOF
           
-          # Universal Info.plist
+          # Plist
           cat <<EOF > Payload/Unleashed.app/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-            <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
-            <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
-            <key>CFBundleName</key><string>Unleashed</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleShortVersionString</key><string>1.0</string>
-            <key>LSRequiresIPhoneOS</key><true/>
-            <key>UIDeviceFamily</key><array><integer>2</integer></array>
-            <key>UIFileSharingEnabled</key><true/>
-            <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-          </dict></plist>
-          EOF
-          
-          chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
-          zip -ry Unleashed_Finals.ipa Payload
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Unleashed-Final-Build
-          path: Unleashed_Finals.ipa
+          <?xml version="1.0" encoding="UTF-
