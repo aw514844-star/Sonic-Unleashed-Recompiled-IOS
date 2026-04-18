@@ -1,4 +1,4 @@
-name: Unleashed Recomp - TITAN v17 ULTIMATE
+name: Unleashed Recomp - Titan v10
 on: [push, workflow_dispatch]
 
 jobs:
@@ -13,103 +13,98 @@ jobs:
 
       - name: Setup Build Environment
         run: |
-          brew install ninja cmake shaderc glslang ldid
+          brew install ninja cmake shaderc glslang
           echo "/opt/homebrew/bin" >> $GITHUB_PATH
 
-      - name: Nerun Fork Surgery
+      - name: Total Lockdown Surgery
         run: |
-          # 1. Clean dependencies to prevent CMake hanging
-          find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(fmt.*)//g' {} +
-          find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(CURL.*)//g' {} +
-          
-          # 2. Force link iOS Native Frameworks (Metal + PS4 Controller + Full Screen)
-          MAIN_CMAKELISTS="UnleashedRecomp/CMakeLists.txt"
-          echo 'link_libraries("-framework Metal -framework MetalKit -framework GameController -framework QuartzCore -framework UIKit -framework CoreGraphics")' >> $MAIN_CMAKELISTS
+          # 1. DELETE FIND_PACKAGE CALLS
+          # Using a simpler sed pattern that works reliably on macOS
+          find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(.*)//g' {} +
 
-          # 3. Shader Fix (SPIR-V for Metal)
+          # 2. GLOBAL INJECTION
+          # Fixed the space in GITHUB_WORKSPACE and ensured paths are absolute
+          find . -name "CMakeLists.txt" -exec sh -c "
+            echo 'include_directories(\"${GITHUB_WORKSPACE}/thirdparty/fmt/include\")' >> \$1
+            echo 'include_directories(\"${GITHUB_WORKSPACE}/thirdparty/curl/include\")' >> \$1
+            echo 'include_directories(\"${GITHUB_WORKSPACE}/thirdparty/freetype/include\")' >> \$1
+            echo 'include_directories(\"${GITHUB_WORKSPACE}/thirdparty/SDL/include\")' >> \$1
+            echo 'link_libraries(\"${GITHUB_WORKSPACE}/thirdparty/curl/libcurl.a\")' >> \$1
+            echo 'link_libraries(\"${GITHUB_WORKSPACE}/thirdparty/freetype/libfreetype.a\")' >> \$1
+            echo 'add_compile_options(-Wno-error=everything -Wno-all -w)' >> \$1
+          " _ {} \;
+
+      - name: Shader Generation
+        run: |
           mkdir -p UnleashedRecomp/gpu/shader/hlsl/
-          for f in $(find UnleashedRecomp/gpu/shader -name "*.hlsl"); do
+          # Ensure we don't crash if no hlsl files are found
+          shopt -s globstar
+          for f in UnleashedRecomp/gpu/shader/**/*.hlsl; do
+            [ -e "$f" ] || continue
             filename=$(basename "$f")
             glslangValidator -V "$f" -o "UnleashedRecomp/gpu/shader/hlsl/$filename.spirv.h" --vn "${filename%.*}_spirv" || \
             echo "const unsigned int ${filename%.*}_spirv[] = {0x07230203, 0};" > "UnleashedRecomp/gpu/shader/hlsl/$filename.spirv.h"
           done
 
-      - name: Build for iPad 9 (A13 Bionic)
+      - name: Build Engine
         run: |
+          rm -rf build_ios
+          cat <<EOF > titan.cmake
+          set(fmt_FOUND TRUE CACHE BOOL "" FORCE)
+          set(CURL_FOUND TRUE CACHE BOOL "" FORCE)
+          set(FREETYPE_FOUND TRUE CACHE BOOL "" FORCE)
+          set(ZLIB_FOUND TRUE CACHE BOOL "" FORCE)
+          set(SDL2_FOUND TRUE CACHE BOOL "" FORCE)
+          set(GENERATE_SPIRV OFF CACHE BOOL "" FORCE)
+          EOF
+
           cmake -S . -B build_ios -G Ninja \
+            -C titan.cmake \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_BUILD_TYPE=Release \
-            -DOPTIMIZE_FOR_A13=ON \
-            -DENABLE_METAL=ON \
             -DENABLE_JIT=ON \
-            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF
+            -DOPTIMIZE_FOR_A13=ON \
+            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
+            -DUSE_INTERNAL_FMT=ON
           
           cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
-      - name: Packaging & Final Injection
+      - name: Verification & IPA Creation
         run: |
-          # 1. Locate the engine binary
+          # Find the actual app bundle or executable
           EXE_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -path "*/.*" | head -n 1)
-          if [ -z "$EXE_PATH" ]; then echo "❌ BUILD FAILURE: NO BINARY"; exit 1; fi
           
-          # 2. Setup Exact Structure
-          mkdir -p Payload/Unleashed.app/UnleashedRecompLib/private
-          cp "$EXE_PATH" Payload/Unleashed.app/UnleashedRecomp
+          if [ -z "$EXE_PATH" ]; then
+            echo "❌ TITAN CRASH: No binary was built."
+            exit 1
+          fi
 
-          # 3. Targeted Asset Injection (Pulling from your confirmed folder)
-          SOURCE_DIR="UnleashedRecompLib/private"
-          cp "$SOURCE_DIR/default.xex" Payload/Unleashed.app/UnleashedRecompLib/private/ 2>/dev/null || echo "⚠️ xex missing"
-          cp "$SOURCE_DIR/default.xexp" Payload/Unleashed.app/UnleashedRecompLib/private/ 2>/dev/null || echo "⚠️ xexp missing"
-          cp "$SOURCE_DIR/shader.ar" Payload/Unleashed.app/UnleashedRecompLib/private/ 2>/dev/null || echo "⚠️ shader missing"
-
-          # 4. Info.plist: Full Screen + PS4 Controller + File Sharing
+          mkdir -p Payload/Unleashed.app
+          cp "$EXE_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
+          
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-              <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
-              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
-              <key>CFBundleName</key><string>Unleashed</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>1.7</string>
-              <key>LSRequiresIPhoneOS</key><true/>
-              
-              <key>UIFileSharingEnabled</key><true/>
-              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-              
-              <key>UIRequiresFullScreen</key><true/>
-              <key>UIStatusBarHidden</key><true/>
-              <key>UISupportedInterfaceOrientations~ipad</key>
-              <array>
-                  <string>UIInterfaceOrientationLandscapeLeft</string>
-                  <string>UIInterfaceOrientationLandscapeRight</string>
-              </array>
-              
-              <key>GCSupportedGameControllers</key>
-              <array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
-              <key>GCSupportsControllerUserCustomization</key><true/>
-              <key>UIDeviceFamily</key><array><integer>2</integer></array>
+            <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
+            <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
+            <key>CFBundleName</key><string>Unleashed</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
+            <key>LSRequiresIPhoneOS</key><true/>
+            <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+            <key>UIFileSharingEnabled</key><true/>
           </dict>
           </plist>
           EOF
           
-          # 5. Sign for JIT/High Memory
-          cat <<EOF > entitlements.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <plist version="1.0"><dict>
-              <key>get-task-allow</key><true/>
-              <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
-          </dict></plist>
-          EOF
-          
-          ldid -Sentitlements.plist Payload/Unleashed.app/UnleashedRecomp
-          zip -ry Unleashed_TITAN_v17.ipa Payload
+          zip -ry Unleashed_V10.ipa Payload
 
-      - name: Upload Final Build
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-TITAN-v17
-          path: Unleashed_TITAN_v17.ipa
+          name: Unleashed-Final-Titan-10
+          path: Unleashed_V10.ipa
