@@ -1,4 +1,4 @@
-name: Unleashed Recomp - OMEGA v11
+name: Unleashed Recomp - OMEGA v13 (THE FINISHER)
 on: [push, workflow_dispatch]
 
 jobs:
@@ -13,10 +13,9 @@ jobs:
       - name: Setup Build Environment
         run: brew install ninja cmake shaderc glslang
 
-      - name: Build Engine (Encyclopedia Mapping)
+      - name: Build Engine (Force-Skipping fmt Search)
         run: |
           rm -rf build_ios
-          # We are "Force-Feeding" the pantry paths exactly as your notes describe
           cmake -S . -B build_ios -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
@@ -28,9 +27,11 @@ jobs:
             -DCONTROLLER_PS4=ON \
             -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
             -DUSE_INTERNAL_FMT=ON \
+            -Dfmt_FOUND=TRUE \
+            -Dfmt_DIR="${GITHUB_WORKSPACE}/thirdparty/fmt" \
+            -DCMAKE_DISABLE_FIND_PACKAGE_fmt=ON \
             -DMSDFGEN_USE_FREETYPE=OFF \
             -DMSDFGEN_BUILD_STANDALONE=OFF \
-            -DFETCHCONTENT_FULLY_DISCONNECTED=OFF \
             -DENABLE_NETWORKING=ON \
             -DCURL_INCLUDE_DIR="${GITHUB_WORKSPACE}/thirdparty/curl/include" \
             -DCURL_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
@@ -38,19 +39,19 @@ jobs:
             -DFREETYPE_INCLUDE_DIRS="${GITHUB_WORKSPACE}" \
             -DFREETYPE_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
             -DFREETYPE_LIBRARIES="${GITHUB_WORKSPACE}/CMakeLists.txt" \
-            -Dfmt_DIR="${GITHUB_WORKSPACE}/thirdparty/fmt" \
-            -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/thirdparty/fmt;${GITHUB_WORKSPACE}/thirdparty/curl"
+            -DSDL2_INCLUDE_DIR="${GITHUB_WORKSPACE}/thirdparty/SDL/include" \
+            -DSDL2_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
+            -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/thirdparty/fmt"
 
           cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
-      - name: Construct iPad 9 Optimized IPA
+      - name: Construct IPA
         run: |
           rm -rf Payload Unleashed_Finals.ipa
           mkdir -p Payload/Unleashed.app
           
-          # 1. FIND BINARY
-          BINARY_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" | grep -i "Unleashed" | xargs du -a | sort -n -r | head -n 1 | awk '{print $2}')
-          
+          # Find the compiled binary
+          BINARY_PATH=$(find build_ios -name "Unleashed*" -type f -perm +111 | head -n 1)
           if [ -z "$BINARY_PATH" ]; then
             echo "❌ ERROR: Compilation failed. No binary found."
             exit 1
@@ -58,71 +59,44 @@ jobs:
           
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
           
-          # 2. INJECT PRIVATE DATA (Exactly from your fork's location)
-          echo "📥 Injecting assets from UnleashedRecompLib/private..."
-          cp UnleashedRecompLib/private/default.xex Payload/Unleashed.app/ 2>/dev/null || true
-          cp UnleashedRecompLib/private/default.xexp Payload/Unleashed.app/ 2>/dev/null || true
-          cp UnleashedRecompLib/private/shader.ar Payload/Unleashed.app/ 2>/dev/null || true
+          # Inject Private Assets
+          cp UnleashedRecompLib/private/* Payload/Unleashed.app/ 2>/dev/null || true
           
-          # 3. IPAD 9 OPTIMIZED CONFIG (Metal + 4:3)
+          # Optimized Config
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
           ResolutionScale = 1.0
-          FrameRateLimit = 60
-          FullScreen = true
           AspectRatio = "4:3"
           [Input]
-          ControllerEnabled = true
           GamepadType = "DualShock4"
           [Core]
           JIT_Mode = "Hybrid"
-          SafeMode = true
           DataPath = "./"
           EOF
           
-          # 4. FINALIZED INFO.PLIST (File Sharing + PS4 Controller Support)
+          # Universal Info.plist
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
-              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
-              <key>CFBundleName</key><string>Unleashed</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>1.0</string>
-              <key>LSRequiresIPhoneOS</key><true/>
-              <key>MinimumOSVersion</key><string>15.0</string>
-              <key>UIDeviceFamily</key><array><integer>2</integer></array>
-              <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
-              <key>UIFileSharingEnabled</key><true/>
-              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-              <key>UISupportedInterfaceOrientations</key>
-              <array>
-                  <string>UIInterfaceOrientationLandscapeLeft</string>
-                  <string>UIInterfaceOrientationLandscapeRight</string>
-              </array>
-              <key>GCSupportedGameControllers</key>
-              <array>
-                  <dict>
-                      <key>ProfileName</key>
-                      <string>ExtendedGamepad</string>
-                  </dict>
-              </array>
-              <key>GCSupportsControllerUserInteraction</key>
-              <true/>
-          </dict>
-          </plist>
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
+            <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
+            <key>CFBundleName</key><string>Unleashed</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
+            <key>LSRequiresIPhoneOS</key><true/>
+            <key>UIDeviceFamily</key><array><integer>2</integer></array>
+            <key>UIFileSharingEnabled</key><true/>
+            <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+          </dict></plist>
           EOF
           
-          # 5. SEAL IPA
           chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
-          chmod -R 755 Payload/Unleashed.app/
           zip -ry Unleashed_Finals.ipa Payload
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-The-Finals-iPad9
+          name: Unleashed-Final-Build
           path: Unleashed_Finals.ipa
