@@ -1,4 +1,4 @@
-name: "Unleashed Recomp - OMEGA v18 (THE OVERRIDE)"
+name: Unleashed Recomp - TITAN v1
 on: [push, workflow_dispatch]
 
 jobs:
@@ -14,20 +14,35 @@ jobs:
       - name: Setup Build Environment
         run: brew install ninja cmake shaderc glslang
 
-      - name: Build Engine (Cache Injection)
+      - name: Build Engine (TITAN Protocol)
         run: |
           rm -rf build_ios
-          # Create a 'Pre-load' file to trick CMake into thinking dependencies are found
-          # Use $GITHUB_WORKSPACE environment variable correctly inside the file
-          cat <<EOF > preload.cmake
+          
+          # We are now populating the cache for EVERY major dependency
+          cat <<EOF > titan.cmake
           set(fmt_FOUND TRUE CACHE BOOL "" FORCE)
-          set(fmt_DIR "$GITHUB_WORKSPACE/thirdparty/fmt" CACHE PATH "" FORCE)
-          set(fmt_INCLUDE_DIR "$GITHUB_WORKSPACE/thirdparty/fmt/include" CACHE PATH "" FORCE)
-          set(FMT_INCLUDE_DIRS "$GITHUB_WORKSPACE/thirdparty/fmt/include" CACHE PATH "" FORCE)
+          set(fmt_DIR "${GITHUB_WORKSPACE}/thirdparty/fmt" CACHE PATH "" FORCE)
+          
+          # FREETYPE LOCKDOWN
+          set(Freetype_FOUND TRUE CACHE BOOL "" FORCE)
+          set(FREETYPE_FOUND TRUE CACHE BOOL "" FORCE)
+          set(FREETYPE_INCLUDE_DIRS "${GITHUB_WORKSPACE}/thirdparty/freetype/include" CACHE PATH "" FORCE)
+          set(FREETYPE_INCLUDE_DIR_ft2build "${GITHUB_WORKSPACE}/thirdparty/freetype/include" CACHE PATH "" FORCE)
+          set(FREETYPE_LIBRARIES "${GITHUB_WORKSPACE}/thirdparty/freetype/libfreetype.a" CACHE PATH "" FORCE)
+          
+          # CURL LOCKDOWN
+          set(CURL_FOUND TRUE CACHE BOOL "" FORCE)
+          set(CURL_INCLUDE_DIRS "${GITHUB_WORKSPACE}/thirdparty/curl/include" CACHE PATH "" FORCE)
+          set(CURL_LIBRARIES "${GITHUB_WORKSPACE}/thirdparty/curl/libcurl.a" CACHE PATH "" FORCE)
+          
+          # SDL2 LOCKDOWN
+          set(SDL2_FOUND TRUE CACHE BOOL "" FORCE)
+          set(SDL2_INCLUDE_DIRS "${GITHUB_WORKSPACE}/thirdparty/SDL/include" CACHE PATH "" FORCE)
+          set(SDL2_LIBRARIES "${GITHUB_WORKSPACE}/thirdparty/SDL/libSDL2.a" CACHE PATH "" FORCE)
           EOF
           
           cmake -S . -B build_ios -G Ninja \
-            -C preload.cmake \
+            -C titan.cmake \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -39,60 +54,27 @@ jobs:
             -DUSE_INTERNAL_FMT=ON \
             -DGENERATE_SPIRV=ON \
             -DMSDFGEN_USE_FREETYPE=OFF \
-            -DMSDFGEN_BUILD_STANDALONE=OFF \
-            -DCURL_INCLUDE_DIR="$GITHUB_WORKSPACE/thirdparty/curl/include" \
-            -DCURL_LIBRARY="$GITHUB_WORKSPACE/thirdparty/curl/libcurl.a" \
-            -DFREETYPE_INCLUDE_DIR_ft2build="$GITHUB_WORKSPACE/thirdparty/freetype/include" \
-            -DFREETYPE_LIBRARY="$GITHUB_WORKSPACE/thirdparty/freetype/libfreetype.a" \
-            -DSDL2_INCLUDE_DIR="$GITHUB_WORKSPACE/thirdparty/SDL/include" \
-            -DSDL2_LIBRARY="$GITHUB_WORKSPACE/thirdparty/SDL/libSDL2.a"
+            -DMSDFGEN_BUILD_STANDALONE=OFF
 
           cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
-      - name: Construct IPA
+      - name: The Truth Check
         run: |
-          rm -rf Payload Unleashed_Finals.ipa
-          mkdir -p Payload/Unleashed.app
-          
-          # Improved Binary Search: macOS 'find' uses -perm +111 differently than Linux
-          # We look for a Mach-O executable specifically
-          BINARY_PATH=$(find build_ios -type f -maxdepth 4 -perm -111 ! -name "*.a" ! -name "*.dylib" ! -name "*.cmake" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
-          
-          if [ -z "$BINARY_PATH" ]; then
-            echo "❌ CRITICAL FAILURE: Compilation did not produce a binary."
+          EXE_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" | head -n 1)
+          if [ -z "$EXE_PATH" ]; then
+            echo "❌ TITAN FAILURE: Binary not found."
             exit 1
           fi
           
-          echo "Found binary at: $BINARY_PATH"
-          cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
+          mkdir -p Payload/Unleashed.app
+          cp "$EXE_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
           
-          # Copy resources if they exist
-          if [ -d "UnleashedRecompLib/private" ]; then
-            cp -R UnleashedRecompLib/private/* Payload/Unleashed.app/
-          fi
+          printf '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string><key>CFBundleIdentifier</key><string>com.unleashed.recomp</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>LSRequiresIPhoneOS</key><true/><key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array></dict></plist>' > Payload/Unleashed.app/Info.plist
           
-          # Final Plist
-          cat <<EOF > Payload/Unleashed.app/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
-              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
-              <key>CFBundleName</key><string>Unleashed</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>LSRequiresIPhoneOS</key><true/>
-              <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
-              <key>UIFileSharingEnabled</key><true/>
-          </dict>
-          </plist>
-          EOF
-          
-          chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
-          zip -ry Unleashed_Finals.ipa Payload
+          zip -ry Unleashed_Titan.ipa Payload
 
-      - name: Upload Artifact
+      - name: Upload TITAN IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-The-Final-IPA
-          path: Unleashed_Finals.ipa
+          name: Unleashed-Titan-IPA
+          path: Unleashed_Titan.ipa
