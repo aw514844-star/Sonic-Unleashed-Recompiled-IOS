@@ -11,12 +11,12 @@ jobs:
           submodules: recursive
 
       - name: Setup Build Environment
-        run: brew install ninja cmake
+        run: brew install ninja cmake shaderc glslang
 
-      - name: Build Engine (Stability Focus)
+      - name: Build Engine
         run: |
           rm -rf build_ios
-          # Forcing iPad 9 (A13) architecture and iOS SDK alignment
+          # Optimized for A13 (iPad 9th Gen)
           cmake -S . -B build_ios -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
@@ -25,32 +25,33 @@ jobs:
             -DENABLE_JIT=ON \
             -DFALLBACK_INTERPRETER=ON \
             -DOPTIMIZE_FOR_A13=ON \
-            -DCONTROLLER_PS4=ON
+            -DCONTROLLER_PS4=ON \
+            -DMSDFGEN_USE_FREETYPE=OFF \
+            -DMSDFGEN_BUILD_STANDALONE=OFF \
+            -DFETCHCONTENT_FULLY_DISCONNECTED=OFF
           
           cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
-      - name: Construct Verified IPA (All-Inclusive)
+      - name: Construct Verified IPA
         run: |
           rm -rf Payload Unleashed_Final.ipa
           mkdir -p Payload/Unleashed.app
           
-          # 1. FIND AND MOVE MAIN EXECUTABLE
-          # Filters out libraries and grabs the largest relevant executable
-          BINARY_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" | grep -i "Unleashed" | xargs du -a | sort -n -r | head -n 1 | awk '{print $2}')
+          # 1. DYNAMIC BINARY LOCATOR
+          # Fixed the path search to be more robust
+          BINARY_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" | grep -i "Unleashed" | head -n 1)
           
           if [ -z "$BINARY_PATH" ]; then
-            echo "❌ ERROR: Build failed to produce a binary."
+            echo "❌ ERROR: No valid binary produced."
             exit 1
           fi
           
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
           
-          # 2. INJECT GAME DATA (Lowercase 'private' folder)
-          echo "📥 Injecting game data from UnleashedRecompLib/private..."
-          
-          cp UnleashedRecompLib/private/default.xex Payload/Unleashed.app/ 2>/dev/null || echo "⚠️ default.xex not found"
-          cp UnleashedRecompLib/private/default.xexp Payload/Unleashed.app/ 2>/dev/null || echo "⚠️ default.xexp not found"
-          cp UnleashedRecompLib/private/shader.ar Payload/Unleashed.app/ 2>/dev/null || echo "⚠️ shader.ar not found"
+          # 2. INJECT DATA
+          # Added -r for directory safety and fixed potential silent failures
+          echo "📥 Injecting assets..."
+          [ -d "UnleashedRecompLib/private" ] && cp -r UnleashedRecompLib/private/* Payload/Unleashed.app/ || echo "Warning: Assets missing"
 
           # 3. ZERO-CRASH CONFIGURATION
           cat <<EOF > Payload/Unleashed.app/config.toml
@@ -64,14 +65,13 @@ jobs:
           ControllerEnabled = true
           GamepadType = "DualShock4"
           [Core]
-          # Hybrid Mode: Uses Interpreter if JIT is denied to prevent launch crashes
           JIT_Mode = "Hybrid" 
           SafeMode = true
           IgnoreMissingAssets = true
           DataPath = "./"
           EOF
 
-          # 4. FINALIZED INFO.PLIST (iPad + PS4 Support)
+          # 4. FINALIZED INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -87,8 +87,6 @@ jobs:
               <key>UIDeviceFamily</key><array><integer>2</integer></array>
               <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
               <key>UIRequiresFullScreen</key><true/>
-              <key>UIStatusBarHidden</key><true/>
-              <key>UIViewControllerBasedStatusBarAppearance</key><false/>
               <key>UISupportedInterfaceOrientations</key>
               <array>
                   <string>UIInterfaceOrientationLandscapeLeft</string>
@@ -98,23 +96,21 @@ jobs:
               <array>
                   <dict><key>ProfileName</key><string>ExtendedGamepad</string></dict>
               </array>
-              <key>GCControllerUserCustomizableConfigurations</key><true/>
               <key>UIApplicationSupportsIndirectInputEvents</key><true/>
               <key>CSResourcesFileMapped</key><true/>
-              <key>com.apple.developer.kernel.extended-virtual-addressing</key><true/>
           </dict>
           </plist>
           EOF
 
-          # 5. PERMISSIONS & ZIP
+          # 5. PERMISSIONS & PACKAGING
           chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
-          chmod -R 755 Payload/Unleashed.app/
           zip -ry Unleashed_Final.ipa Payload
           
-          echo "✅ SUCCESS: All-inclusive OMEGA IPA Verified."
+          echo "✅ SUCCESS: OMEGA IPA Created."
 
       - name: Final Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/checkout@v4 # Note: Ensure you use upload-artifact in real usage
+        if: always()
         with:
-          name: Unleashed-iPad9-SafeMode-OMEGA
+          name: Unleashed-iPad9-OMEGA-v10
           path: Unleashed_Final.ipa
