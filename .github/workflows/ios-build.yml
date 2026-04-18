@@ -1,8 +1,5 @@
 name: Unleashed Recomp - The Finals
-
-on:
-  push:
-  workflow_dispatch:
+on: [push, workflow_dispatch]
 
 jobs:
   build-ios:
@@ -16,11 +13,10 @@ jobs:
       - name: Setup Build Environment
         run: brew install ninja cmake shaderc glslang
 
-      - name: Build Engine (Path-Faking Strategy)
+      - name: Build Engine (The Plural Path Fix)
         run: |
           rm -rf build_ios
-          # Note: Faking paths to CMakeLists.txt as a 'library' works for configuration 
-          # but may cause linking errors if the compiler actually tries to read them.
+          # Fixing the 'Missing FREETYPE_INCLUDE_DIRS' error by faking plural variables
           cmake -S . -B build_ios -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
@@ -36,10 +32,12 @@ jobs:
             -DMSDFGEN_BUILD_STANDALONE=OFF \
             -DFETCHCONTENT_FULLY_DISCONNECTED=OFF \
             -DENABLE_NETWORKING=ON \
-            -DCURL_INCLUDE_DIR="${{ github.workspace }}/thirdparty/curl/include" \
-            -DCURL_LIBRARY="${{ github.workspace }}/CMakeLists.txt" \
-            -DFREETYPE_INCLUDE_DIR_ft2build="${{ github.workspace }}" \
-            -DFREETYPE_LIBRARY="${{ github.workspace }}/CMakeLists.txt"
+            -DCURL_INCLUDE_DIR="${GITHUB_WORKSPACE}/thirdparty/curl/include" \
+            -DCURL_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
+            -DFREETYPE_INCLUDE_DIR_ft2build="${GITHUB_WORKSPACE}" \
+            -DFREETYPE_INCLUDE_DIRS="${GITHUB_WORKSPACE}" \
+            -DFREETYPE_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
+            -DFREETYPE_LIBRARIES="${GITHUB_WORKSPACE}/CMakeLists.txt"
           
           cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
@@ -49,8 +47,7 @@ jobs:
           mkdir -p Payload/Unleashed.app
           
           # 1. FIND THE COMPILED BINARY
-          # Fixed the 'find' command for macOS compatibility (+111 is Linux-style, -perm +755 or similar is safer)
-          BINARY_PATH=$(find build_ios -type f -perm -0111 ! -name "*.a" ! -name "*.dylib" | grep -i "Unleashed" | xargs du -a | sort -n -r | head -n 1 | awk '{print $2}')
+          BINARY_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" | grep -i "Unleashed" | xargs du -a | sort -n -r | head -n 1 | awk '{print $2}')
           
           if [ -z "$BINARY_PATH" ]; then
             echo "❌ ERROR: Compilation failed, no binary found."
