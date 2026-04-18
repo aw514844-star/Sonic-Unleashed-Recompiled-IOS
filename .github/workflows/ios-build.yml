@@ -1,4 +1,4 @@
-name: Unleashed Recomp - OMEGA ULTIMATE FINAL
+name: "Unleashed Recomp - OMEGA v18 (THE OVERRIDE)"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -11,18 +11,23 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Force Submodule Sync
-        run: |
-          git submodule sync --recursive
-          git submodule update --init --recursive --force
-
       - name: Setup Build Environment
         run: brew install ninja cmake shaderc glslang
 
-      - name: Build Engine (The Final Override)
+      - name: Build Engine (Cache Injection)
         run: |
           rm -rf build_ios
+          # Create a 'Pre-load' file to trick CMake into thinking dependencies are found
+          # Use $GITHUB_WORKSPACE environment variable correctly inside the file
+          cat <<EOF > preload.cmake
+          set(fmt_FOUND TRUE CACHE BOOL "" FORCE)
+          set(fmt_DIR "$GITHUB_WORKSPACE/thirdparty/fmt" CACHE PATH "" FORCE)
+          set(fmt_INCLUDE_DIR "$GITHUB_WORKSPACE/thirdparty/fmt/include" CACHE PATH "" FORCE)
+          set(FMT_INCLUDE_DIRS "$GITHUB_WORKSPACE/thirdparty/fmt/include" CACHE PATH "" FORCE)
+          EOF
+          
           cmake -S . -B build_ios -G Ninja \
+            -C preload.cmake \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -30,26 +35,17 @@ jobs:
             -DENABLE_JIT=ON \
             -DFALLBACK_INTERPRETER=ON \
             -DOPTIMIZE_FOR_A13=ON \
-            -DCONTROLLER_PS4=ON \
             -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
             -DUSE_INTERNAL_FMT=ON \
             -DGENERATE_SPIRV=ON \
             -DMSDFGEN_USE_FREETYPE=OFF \
             -DMSDFGEN_BUILD_STANDALONE=OFF \
-            -DENABLE_NETWORKING=ON \
-            -DCURL_INCLUDE_DIR="${GITHUB_WORKSPACE}/thirdparty/curl/include" \
-            -DCURL_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
-            -DFREETYPE_INCLUDE_DIR_ft2build="${GITHUB_WORKSPACE}" \
-            -DFREETYPE_INCLUDE_DIRS="${GITHUB_WORKSPACE}" \
-            -DFREETYPE_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
-            -DFREETYPE_LIBRARIES="${GITHUB_WORKSPACE}/CMakeLists.txt" \
-            -DSDL2_INCLUDE_DIR="${GITHUB_WORKSPACE}/thirdparty/SDL/include" \
-            -DSDL2_LIBRARY="${GITHUB_WORKSPACE}/CMakeLists.txt" \
-            -Dfmt_DIR="${GITHUB_WORKSPACE}/thirdparty/fmt" \
-            -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/thirdparty/fmt" \
-            -Dfmt_FOUND=TRUE \
-            -DFMT_INSTALL=OFF \
-            -DFMT_TEST=OFF
+            -DCURL_INCLUDE_DIR="$GITHUB_WORKSPACE/thirdparty/curl/include" \
+            -DCURL_LIBRARY="$GITHUB_WORKSPACE/thirdparty/curl/libcurl.a" \
+            -DFREETYPE_INCLUDE_DIR_ft2build="$GITHUB_WORKSPACE/thirdparty/freetype/include" \
+            -DFREETYPE_LIBRARY="$GITHUB_WORKSPACE/thirdparty/freetype/libfreetype.a" \
+            -DSDL2_INCLUDE_DIR="$GITHUB_WORKSPACE/thirdparty/SDL/include" \
+            -DSDL2_LIBRARY="$GITHUB_WORKSPACE/thirdparty/SDL/libSDL2.a"
 
           cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
@@ -58,40 +54,38 @@ jobs:
           rm -rf Payload Unleashed_Finals.ipa
           mkdir -p Payload/Unleashed.app
           
-          # Find the binary - adding a wildcard search for variations
-          BINARY_PATH=$(find build_ios -type f -perm +111 -name "Unleashed*" | head -n 1)
+          # Improved Binary Search: macOS 'find' uses -perm +111 differently than Linux
+          # We look for a Mach-O executable specifically
+          BINARY_PATH=$(find build_ios -type f -maxdepth 4 -perm -111 ! -name "*.a" ! -name "*.dylib" ! -name "*.cmake" | xargs file | grep "Mach-O" | cut -d: -f1 | head -n 1)
+          
           if [ -z "$BINARY_PATH" ]; then
-            echo "❌ ERROR: Binary not found. Build failed."
+            echo "❌ CRITICAL FAILURE: Compilation did not produce a binary."
             exit 1
           fi
           
+          echo "Found binary at: $BINARY_PATH"
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
-          cp UnleashedRecompLib/private/* Payload/Unleashed.app/ 2>/dev/null || true
           
-          cat <<EOF > Payload/Unleashed.app/config.toml
-          [Video]
-          GraphicsAPI = "Metal"
-          ResolutionScale = 1.0
-          AspectRatio = "4:3"
-          [Core]
-          JIT_Mode = "Hybrid"
-          DataPath = "./"
-          EOF
+          # Copy resources if they exist
+          if [ -d "UnleashedRecompLib/private" ]; then
+            cp -R UnleashedRecompLib/private/* Payload/Unleashed.app/
+          fi
           
+          # Final Plist
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-            <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
-            <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
-            <key>CFBundleName</key><string>Unleashed</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleShortVersionString</key><string>1.0</string>
-            <key>LSRequiresIPhoneOS</key><true/>
-            <key>UIDeviceFamily</key><array><integer>2</integer></array>
-            <key>UIFileSharingEnabled</key><true/>
-            <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-          </dict></plist>
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
+              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
+              <key>CFBundleName</key><string>Unleashed</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+              <key>UIFileSharingEnabled</key><true/>
+          </dict>
+          </plist>
           EOF
           
           chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
@@ -100,5 +94,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Final-Build
+          name: Unleashed-The-Final-IPA
           path: Unleashed_Finals.ipa
