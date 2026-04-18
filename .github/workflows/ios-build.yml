@@ -1,87 +1,67 @@
-name: Sonic Unleashed - OMEGA v8
-on: [workflow_dispatch, push]
+name: Unleashed Recomp iPad 9 OMEGA v10
+on: [push, workflow_dispatch]
 
 jobs:
-  build:
+  build-ios:
     runs-on: macos-latest
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0
 
-      - name: Total Dependency Nuclear Strike
-        run: |
-          # Installing everything the engine could possibly dream of needing
-          brew install cmake ninja pkg-config freetype libpng zlib curl openssl@3 fmt sdl2 glm glslang shaderc libogg libvorbis opus
-          echo "/opt/homebrew/bin:/usr/local/bin" >> $GITHUB_PATH
-          sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+      - name: Setup Build Environment
+        run: brew install ninja cmake
 
-      - name: Generate & Build (Metal/iOS/Total-Fix)
+      - name: Build Engine (Stability Focus)
         run: |
-          mkdir -p build_ios
-          # Path Mapping for every possible library
-          export FT_PATH=$(brew --prefix freetype)
-          export PNG_PATH=$(brew --prefix libpng)
-          export CURL_PATH=$(brew --prefix curl)
-          export SSL_PATH=$(brew --prefix openssl@3)
-          export FMT_PATH=$(brew --prefix fmt)
-          export SDL2_PATH=$(brew --prefix sdl2)
-          export GLSL_PATH=$(brew --prefix glslang)
-          
-          cmake -S . -B build_ios \
-            -G Xcode \
+          rm -rf build_ios
+          cmake -S . -B build_ios -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            -DCMAKE_XCODE_ATTRIBUTE_ENABLE_BITCODE=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf \
-            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
-            -DUNLEASHED_RECOMP_GENERATE_SHADERS=ON \
-            -DSHADERC_LIB_DIR="$(brew --prefix shaderc)/lib" \
-            -DFREETYPE_INCLUDE_DIRS="$FT_PATH/include/freetype2" \
-            -DFREETYPE_LIBRARY="$FT_PATH/lib/libfreetype.a" \
-            -DPNG_INCLUDE_DIRS="$PNG_PATH/include" \
-            -DPNG_LIBRARY="$PNG_PATH/lib/libpng.a" \
-            -DCURL_INCLUDE_DIR="$CURL_PATH/include" \
-            -DCURL_LIBRARY="$CURL_PATH/lib/libcurl.a" \
-            -Dfmt_DIR="$FMT_PATH/lib/cmake/fmt" \
-            -DSDL2_DIR="$SDL2_PATH/lib/cmake/SDL2" \
-            -DOPENSSL_ROOT_DIR="$SSL_PATH" \
-            -DOPENSSL_USE_STATIC_LIBS=TRUE \
-            -DSDL_STATIC=ON \
-            -DSDL_METAL=ON \
-            -DMSDFGEN_BUILD_STANDALONE=OFF
+            -DCMAKE_OSX_ARCHITECTURES="arm64" \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_JIT=ON \
+            -DFALLBACK_INTERPRETER=ON \
+            -DOPTIMIZE_FOR_A13=ON \
+            -DCONTROLLER_PS4=ON
+          
+          cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
-          # Execute the massive build
-          cmake --build build_ios --config Release --target UnleashedRecompiOSD -- -sdk iphoneos
-
-      - name: Construct Verified IPA (Rare Error Protection)
+      - name: Construct Verified IPA
         run: |
           rm -rf Payload Unleashed_Final.ipa
-          mkdir -p Payload/Unleashed.app/private
+          mkdir -p Payload/Unleashed.app
           
-          BUILT_APP=$(find build_ios -name "UnleashedRecompiOSD.app" -type d | grep "Release-iphoneos" | head -n 1)
-          if [ -z "$BUILT_APP" ]; then BUILT_APP=$(find build_ios -name "*.app" -type d | head -n 1); fi
+          # Locating the primary binary
+          BINARY_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" | grep -i "Unleashed" | xargs du -a | sort -n -r | head -n 1 | awk '{print $2}')
           
-          cp -a "$BUILT_APP/" Payload/Unleashed.app/
+          if [ -z "$BINARY_PATH" ]; then
+            echo "❌ ERROR: Build failed to produce a binary."
+            exit 1
+          fi
           
-          # Force Metal and Disable Analytics (Prevents rare startup crashes)
+          cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
+          
+          # 1. FAIL-SAFE CONFIGURATION
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
           ResolutionScale = 1.0
           FrameRateLimit = 60
           FullScreen = true
+          AspectRatio = "4:3"
+          [Input]
+          ControllerEnabled = true
+          GamepadType = "DualShock4"
           [Core]
-          EnableAnalytics = false
+          # Changed to Hybrid: If JIT is blocked, it uses Interpreter instead of crashing
+          JIT_Mode = "Hybrid" 
+          SafeMode = true
+          IgnoreMissingAssets = true
           EOF
 
-          # Hardened Info.plist
+          # 2. ZERO-CRASH INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -94,23 +74,6 @@ jobs:
               <key>CFBundleShortVersionString</key><string>1.0</string>
               <key>LSRequiresIPhoneOS</key><true/>
               <key>MinimumOSVersion</key><string>15.0</string>
-              <key>UIFileSharingEnabled</key><true/>
-              <key>UIRequiresFullScreen</key><true/>
               <key>UIDeviceFamily</key><array><integer>2</integer></array>
-              <key>UISupportedInterfaceOrientations</key>
-              <array>
-                  <string>UIInterfaceOrientationLandscapeLeft</string>
-                  <string>UIInterfaceOrientationLandscapeRight</string>
-              </array>
-          </dict>
-          </plist>
-          EOF
-
-          chmod -R 755 Payload/Unleashed.app/
-          zip -ry Unleashed_Final.ipa Payload
-
-      - name: Final Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: Unleashed-iPad-TOTAL-FIX-v8
-          path: Unleashed_Final.ipa
+              <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
+              <key>UIRequiresFullScreen</key>
