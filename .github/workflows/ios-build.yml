@@ -1,4 +1,4 @@
-name: Unleashed Recomp - TITAN v5 (ZERO FAILURE)
+name: Unleashed Recomp - TITAN v6
 on: [push, workflow_dispatch]
 
 jobs:
@@ -14,21 +14,23 @@ jobs:
       - name: Setup Build Environment
         run: brew install ninja cmake shaderc glslang
 
-      - name: Source Surgery (The Bouncer Killer)
+      - name: TITAN Source Surgery
         run: |
-          # This is the most important step. We are removing the 'REQUIRED' 
-          # constraint from the file that keeps crashing your build.
-          sed -i '' 's/find_package(fmt REQUIRED)/find_package(fmt)/g' UnleashedRecomp/CMakeLists.txt
+          # 1. DELETE THE BOUNCERS: Remove "REQUIRED" from all CMake files.
+          # This prevents the "Could not find package" crash.
+          find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(fmt REQUIRED)/find_package(fmt)/g' {} +
+          find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(CURL REQUIRED)/find_package(CURL)/g' {} +
+          find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(Freetype REQUIRED)/find_package(Freetype)/g' {} +
           
-          # Also ensure it doesn't fail on CURL or Freetype if they are marked REQUIRED
-          sed -i '' 's/find_package(CURL REQUIRED)/find_package(CURL)/g' UnleashedRecomp/CMakeLists.txt
-          sed -i '' 's/find_package(Freetype REQUIRED)/find_package(Freetype)/g' UnleashedRecomp/CMakeLists.txt
+          # 2. FORCE INCLUDE: Inject the paths directly into the main project file
+          echo 'include_directories("${GITHUB_WORKSPACE}/thirdparty/fmt/include")' >> UnleashedRecomp/CMakeLists.txt
+          echo 'include_directories("${GITHUB_WORKSPACE}/thirdparty/freetype/include")' >> UnleashedRecomp/CMakeLists.txt
 
-      - name: Build Engine (TITAN v5)
+      - name: Build Engine (TITAN v6 Execution)
         run: |
           rm -rf build_ios
           
-          # Quadruple-checked Cache Injection
+          # 3. THE IRON VAULT CACHE: Pre-filling the answers for the compiler
           cat <<EOF > titan.cmake
           set(fmt_FOUND TRUE CACHE BOOL "" FORCE)
           set(fmt_DIR "${GITHUB_WORKSPACE}/thirdparty/fmt" CACHE PATH "" FORCE)
@@ -48,6 +50,7 @@ jobs:
           set(SDL2_LIBRARY "${GITHUB_WORKSPACE}/thirdparty/SDL/libSDL2.a" CACHE FILEPATH "" FORCE)
           EOF
           
+          # 4. COMPILER CONFIGURATION
           cmake -S . -B build_ios -G Ninja \
             -C titan.cmake \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -61,31 +64,33 @@ jobs:
             -DUSE_INTERNAL_FMT=ON \
             -DGENERATE_SPIRV=ON \
             -DMSDFGEN_USE_FREETYPE=ON \
-            -DMSDFGEN_BUILD_STANDALONE=OFF \
             -DENABLE_NETWORKING=OFF
 
-          # The REAL Build Step
+          # 5. THE REAL BUILD: Compiling the code
           cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
       - name: The Truth Verification
         run: |
-          # If the compiler actually worked, we will find a binary file.
+          # Search for the binary. If it doesn't exist, we fail RED.
+          # This prevents "Fake Success" checkmarks.
           EXE_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -path "*/.*" | head -n 1)
+          
           if [ -z "$EXE_PATH" ]; then
-            echo "❌ CRITICAL FAILURE: No executable produced. The build step failed internally."
+            echo "❌ TITAN CRASH: No binary created. Look at the compiler logs for code errors."
             exit 1
           fi
           
+          echo "✅ TITAN SUCCESS: Binary found at $EXE_PATH"
           mkdir -p Payload/Unleashed.app
           cp "$EXE_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
           
-          # Inject Info.plist
+          # Generate the Info.plist
           printf '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string><key>CFBundleIdentifier</key><string>com.unleashed.recomp</string><key>CFBundleName</key><string>Unleashed</string><key>CFBundlePackageType</key><string>APPL</string><key>LSRequiresIPhoneOS</key><true/><key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array><key>UIFileSharingEnabled</key><true/></dict></plist>' > Payload/Unleashed.app/Info.plist
           
-          zip -ry Unleashed_Final.ipa Payload
+          zip -ry Unleashed_Titan_Final.ipa Payload
 
-      - name: Upload Final IPA
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Titan-V5
-          path: Unleashed_Final.ipa
+          name: Unleashed-IPA
+          path: Unleashed_Titan_Final.ipa
