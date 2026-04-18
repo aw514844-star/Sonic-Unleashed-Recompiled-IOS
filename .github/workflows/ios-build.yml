@@ -1,4 +1,4 @@
-name: Unleashed Recomp - TITAN v13 ULTIMATE
+name: Unleashed Recomp - TITAN v15 ULTIMATE
 on: [push, workflow_dispatch]
 
 jobs:
@@ -16,17 +16,18 @@ jobs:
           brew install ninja cmake shaderc glslang ldid
           echo "/opt/homebrew/bin" >> $GITHUB_PATH
 
-      - name: Core Surgery & Metal Optimization
+      - name: Nerun Fork Surgery (Manual Framework Linking)
         run: |
-          # 1. Clean dependencies
+          # 1. Strip redundant package checks that cause CMake to hang
           find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(fmt.*)//g' {} +
           find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(CURL.*)//g' {} +
           
-          # 2. Inject Metal & Controller Frameworks
+          # 2. Force link iOS Native Frameworks for Metal & PS4 Controllers
+          # This replaces the missing Xcode project's link phase.
           MAIN_CMAKELISTS="UnleashedRecomp/CMakeLists.txt"
-          echo 'link_libraries("-framework Metal -framework MetalKit -framework GameController -framework QuartzCore -framework UIKit")' >> $MAIN_CMAKELISTS
+          echo 'link_libraries("-framework Metal -framework MetalKit -framework GameController -framework QuartzCore -framework UIKit -framework CoreGraphics")' >> $MAIN_CMAKELISTS
 
-          # 3. Shader Fix
+          # 3. Nerun Shader Fix (SPIR-V for Metal translation)
           mkdir -p UnleashedRecomp/gpu/shader/hlsl/
           for f in $(find UnleashedRecomp/gpu/shader -name "*.hlsl"); do
             filename=$(basename "$f")
@@ -34,8 +35,9 @@ jobs:
             echo "const unsigned int ${filename%.*}_spirv[] = {0x07230203, 0};" > "UnleashedRecomp/gpu/shader/hlsl/$filename.spirv.h"
           done
 
-      - name: Build Engine (iPad 9 Optimized)
+      - name: Build for iPad 9 (A13 Bionic)
         run: |
+          # Generate build files without needing .xcodeproj
           cmake -S . -B build_ios -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
@@ -48,18 +50,20 @@ jobs:
           
           cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
-      - name: The Truth Verification & Full Screen Injection
+      - name: Packaging & True Full Screen Injection
         run: |
-          # 1. Binary Setup
+          # 1. Locate Binary
           EXE_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -path "*/.*" | head -n 1)
           if [ -z "$EXE_PATH" ]; then exit 1; fi
+          
+          # 2. Setup Exact Directory Structure
           mkdir -p Payload/Unleashed.app/UnleashedRecompLib/private
           cp "$EXE_PATH" Payload/Unleashed.app/UnleashedRecomp
 
-          # 2. Asset Injection (Direct mapping)
+          # 3. Targeted Asset Injection
           cp default.xex default.xexp shader.ar Payload/Unleashed.app/UnleashedRecompLib/private/ 2>/dev/null || true
 
-          # 3. TITAN v13 Info.plist (FORCED FULL SCREEN & IPAD OPTIMIZED)
+          # 4. Info.plist: Force iPad 9 Full Screen & PS4 Controller Support
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -69,13 +73,12 @@ jobs:
               <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
               <key>CFBundleName</key><string>Unleashed</string>
               <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>1.3</string>
+              <key>CFBundleShortVersionString</key><string>1.5</string>
               <key>LSRequiresIPhoneOS</key><true/>
               
               <key>UIRequiresFullScreen</key><true/>
               <key>UIStatusBarHidden</key><true/>
               <key>UIViewControllerBasedStatusBarAppearance</key><false/>
-              
               <key>UISupportedInterfaceOrientations~ipad</key>
               <array>
                   <string>UIInterfaceOrientationLandscapeLeft</string>
@@ -83,19 +86,14 @@ jobs:
               </array>
               
               <key>GCSupportedGameControllers</key>
-              <array>
-                  <dict>
-                      <key>ProfileName</key>
-                      <string>ExtendedGamepad</string>
-                  </dict>
-              </array>
+              <array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
               <key>GCSupportsControllerUserCustomization</key><true/>
               <key>UIDeviceFamily</key><array><integer>2</integer></array>
           </dict>
           </plist>
           EOF
           
-          # 4. Sign for JIT & Stability
+          # 5. Pseudo-Sign for JIT & High Memory
           cat <<EOF > entitlements.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <plist version="1.0"><dict>
@@ -105,10 +103,10 @@ jobs:
           EOF
           
           ldid -Sentitlements.plist Payload/Unleashed.app/UnleashedRecomp
-          zip -ry Unleashed_TITAN_v13.ipa Payload
+          zip -ry Unleashed_TITAN_v15.ipa Payload
 
       - name: Upload Final Build
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-TITAN-v13
-          path: Unleashed_TITAN_v13.ipa
+          name: Unleashed-TITAN-v15
+          path: Unleashed_TITAN_v15.ipa
