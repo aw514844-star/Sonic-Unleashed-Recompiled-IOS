@@ -1,4 +1,4 @@
-name: Unleashed Recomp - TITAN v16 ULTIMATE
+name: Unleashed Recomp - TITAN v17 ULTIMATE
 on: [push, workflow_dispatch]
 
 jobs:
@@ -18,15 +18,15 @@ jobs:
 
       - name: Nerun Fork Surgery
         run: |
-          # 1. Clean dependencies
+          # 1. Clean dependencies to prevent CMake hanging
           find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(fmt.*)//g' {} +
           find . -name "CMakeLists.txt" -exec sed -i '' 's/find_package(CURL.*)//g' {} +
           
-          # 2. Force link Frameworks (Metal + Controller + FullScreen Support)
+          # 2. Force link iOS Native Frameworks (Metal + PS4 Controller + Full Screen)
           MAIN_CMAKELISTS="UnleashedRecomp/CMakeLists.txt"
           echo 'link_libraries("-framework Metal -framework MetalKit -framework GameController -framework QuartzCore -framework UIKit -framework CoreGraphics")' >> $MAIN_CMAKELISTS
 
-          # 3. Shader Processing
+          # 3. Shader Fix (SPIR-V for Metal)
           mkdir -p UnleashedRecomp/gpu/shader/hlsl/
           for f in $(find UnleashedRecomp/gpu/shader -name "*.hlsl"); do
             filename=$(basename "$f")
@@ -48,24 +48,23 @@ jobs:
           
           cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
-      - name: Packaging & Path-Correct Asset Injection
+      - name: Packaging & Final Injection
         run: |
-          # 1. Find the executable
+          # 1. Locate the engine binary
           EXE_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -path "*/.*" | head -n 1)
-          if [ -z "$EXE_PATH" ]; then echo "❌ NO BINARY CREATED"; exit 1; fi
+          if [ -z "$EXE_PATH" ]; then echo "❌ BUILD FAILURE: NO BINARY"; exit 1; fi
           
-          # 2. Setup the IPA structure
+          # 2. Setup Exact Structure
           mkdir -p Payload/Unleashed.app/UnleashedRecompLib/private
           cp "$EXE_PATH" Payload/Unleashed.app/UnleashedRecomp
 
-          # 3. INJECT FROM YOUR REPO PATH
-          # Pulling from UnleashedRecompLib/private in your fork
+          # 3. Targeted Asset Injection (Pulling from your confirmed folder)
           SOURCE_DIR="UnleashedRecompLib/private"
-          cp "$SOURCE_DIR/default.xex" Payload/Unleashed.app/UnleashedRecompLib/private/ 2>/dev/null || echo "⚠️ default.xex missing"
-          cp "$SOURCE_DIR/default.xexp" Payload/Unleashed.app/UnleashedRecompLib/private/ 2>/dev/null || echo "⚠️ default.xexp missing"
-          cp "$SOURCE_DIR/shader.ar" Payload/Unleashed.app/UnleashedRecompLib/private/ 2>/dev/null || echo "⚠️ shader.ar missing"
+          cp "$SOURCE_DIR/default.xex" Payload/Unleashed.app/UnleashedRecompLib/private/ 2>/dev/null || echo "⚠️ xex missing"
+          cp "$SOURCE_DIR/default.xexp" Payload/Unleashed.app/UnleashedRecompLib/private/ 2>/dev/null || echo "⚠️ xexp missing"
+          cp "$SOURCE_DIR/shader.ar" Payload/Unleashed.app/UnleashedRecompLib/private/ 2>/dev/null || echo "⚠️ shader missing"
 
-          # 4. Generate iPad 9 Full Screen Info.plist
+          # 4. Info.plist: Full Screen + PS4 Controller + File Sharing
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
@@ -75,18 +74,29 @@ jobs:
               <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
               <key>CFBundleName</key><string>Unleashed</string>
               <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>1.6</string>
+              <key>CFBundleShortVersionString</key><string>1.7</string>
               <key>LSRequiresIPhoneOS</key><true/>
+              
+              <key>UIFileSharingEnabled</key><true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+              
               <key>UIRequiresFullScreen</key><true/>
               <key>UIStatusBarHidden</key><true/>
-              <key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
-              <key>GCSupportedGameControllers</key><array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
+              <key>UISupportedInterfaceOrientations~ipad</key>
+              <array>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+              
+              <key>GCSupportedGameControllers</key>
+              <array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
+              <key>GCSupportsControllerUserCustomization</key><true/>
               <key>UIDeviceFamily</key><array><integer>2</integer></array>
           </dict>
           </plist>
           EOF
           
-          # 5. Pseudo-Sign for iPad JIT
+          # 5. Sign for JIT/High Memory
           cat <<EOF > entitlements.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <plist version="1.0"><dict>
@@ -96,10 +106,10 @@ jobs:
           EOF
           
           ldid -Sentitlements.plist Payload/Unleashed.app/UnleashedRecomp
-          zip -ry Unleashed_TITAN_v16.ipa Payload
+          zip -ry Unleashed_TITAN_v17.ipa Payload
 
       - name: Upload Final Build
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-TITAN-v16
-          path: Unleashed_TITAN_v16.ipa
+          name: Unleashed-TITAN-v17
+          path: Unleashed_TITAN_v17.ipa
