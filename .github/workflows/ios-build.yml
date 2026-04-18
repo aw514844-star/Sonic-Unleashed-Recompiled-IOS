@@ -13,11 +13,10 @@ jobs:
       - name: Setup Build Environment
         run: brew install ninja cmake shaderc glslang
 
-      - name: Build Engine (The 100% Success Nuke)
+      - name: Build Engine (Using Your Fix)
         run: |
           rm -rf build_ios
-          # We are 'faking' the Freetype paths to satisfy the CMake check 
-          # while keeping the MSDFGEN bypass active.
+          # INTEGRATING YOUR CURL FIX DATA
           cmake -S . -B build_ios -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
@@ -28,12 +27,15 @@ jobs:
             -DOPTIMIZE_FOR_A13=ON \
             -DCONTROLLER_PS4=ON \
             -DMSDFGEN_USE_FREETYPE=OFF \
-            -DMSDFGEN_BUILD_STANDALONE=OFF \
+            -DCMAKE_DISABLE_FIND_PACKAGE_Freetype=TRUE \
+            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
+            -DUSE_INTERNAL_FMT=ON \
             -DFETCHCONTENT_FULLY_DISCONNECTED=OFF \
-            -DFREETYPE_LIBRARY="IGNORE" \
-            -DFREETYPE_INCLUDE_DIRS_GENERIC="IGNORE" \
-            -DFREETYPE_INCLUDE_DIRS_FT2BUILD="IGNORE" \
-            -DCMAKE_DISABLE_FIND_PACKAGE_Freetype=TRUE
+            # --- YOUR FIX DATA START ---
+            -DCURL_INCLUDE_DIR="thirdparty/curl/include" \
+            -DCURL_LIBRARY="IGNORE" \
+            -DENABLE_NETWORKING=ON \
+            # --- YOUR FIX DATA END ---
           
           cmake --build build_ios --config Release --parallel $(sysctl -n hw.ncpu)
 
@@ -52,13 +54,13 @@ jobs:
           
           cp "$BINARY_PATH" Payload/Unleashed.app/UnleashedRecompiOSD
           
-          # 2. INJECT GAME DATA (Lowercase 'private' folder)
+          # 2. INJECT GAME DATA
           echo "📥 Injecting assets from UnleashedRecompLib/private..."
           cp UnleashedRecompLib/private/default.xex Payload/Unleashed.app/ 2>/dev/null || true
           cp UnleashedRecompLib/private/default.xexp Payload/Unleashed.app/ 2>/dev/null || true
           cp UnleashedRecompLib/private/shader.ar Payload/Unleashed.app/ 2>/dev/null || true
 
-          # 3. ZERO-CRASH CONFIGURATION
+          # 3. ZERO-CRASH CONFIGURATION (iPad 9 Optimized)
           cat <<EOF > Payload/Unleashed.app/config.toml
           [Video]
           GraphicsAPI = "Metal"
@@ -72,11 +74,10 @@ jobs:
           [Core]
           JIT_Mode = "Hybrid" 
           SafeMode = true
-          IgnoreMissingAssets = true
           DataPath = "./"
           EOF
 
-          # 4. FINALIZED INFO.PLIST (iPad 9 + PS4 Support)
+          # 4. FINALIZED INFO.PLIST
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -93,19 +94,6 @@ jobs:
               <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
               <key>UIRequiresFullScreen</key><true/>
               <key>UIStatusBarHidden</key><true/>
-              <key>UIViewControllerBasedStatusBarAppearance</key><false/>
-              <key>UISupportedInterfaceOrientations</key>
-              <array>
-                  <string>UIInterfaceOrientationLandscapeLeft</string>
-                  <string>UIInterfaceOrientationLandscapeRight</string>
-              </array>
-              <key>GCSupportedGameControllers</key>
-              <array>
-                  <dict><key>ProfileName</key><string>ExtendedGamepad</string></dict>
-              </array>
-              <key>UIApplicationSupportsIndirectInputEvents</key><true/>
-              <key>CSResourcesFileMapped</key><true/>
-              <key>com.apple.developer.kernel.extended-virtual-addressing</key><true/>
           </dict>
           </plist>
           EOF
@@ -120,5 +108,5 @@ jobs:
       - name: Final Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad9-OMEGA-v10
+          name: Unleashed-iPad9-Full-IPA
           path: Unleashed_Final.ipa
