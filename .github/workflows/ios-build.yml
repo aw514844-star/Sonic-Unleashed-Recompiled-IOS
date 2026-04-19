@@ -1,4 +1,4 @@
-name: Unleashed Recomp - Titan v17.5
+name: Unleashed Recomp - Titan v17.7
 on: [push, workflow_dispatch]
 
 jobs:
@@ -16,39 +16,40 @@ jobs:
           brew install ninja cmake shaderc glslang
           echo "/opt/homebrew/bin" >> $GITHUB_PATH
 
-      - name: 3.0 - Sovereign Surgery (Simplified No-Fail)
+      - name: 3.0 - Sovereign Surgery (Emergency Speed Fix)
         run: |
           mkdir -p UnleashedRecompLib/ppc UnleashedRecompLib/private build_host build_ios
 
-          # Force every CMakeLists to a modern version to stop warnings
-          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/cmake_minimum_required\(VERSION .*\)/cmake_minimum_required(VERSION 3.10)/g'
+          # 1. Kill Skia and Standalone Tools (The cause of the last error)
+          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/option\(MSDF_ATLAS_USE_SKIA .*/set(MSDF_ATLAS_USE_SKIA OFF)/g'
+          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/option\(MSDF_ATLAS_BUILD_STANDALONE .*/set(MSDF_ATLAS_BUILD_STANDALONE OFF)/g'
+          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/find_package\(unofficial-skia.*\)//g'
 
-          # Fix {fmt} - Remove the find_package line and add it manually
+          # 2. Kill find_package for FMT and CURL to prevent system conflicts
           find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/find_package\(fmt.*\)//g'
+          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/find_package\(CURL.*\)//g'
           
-          # Add FMT and CURL as subdirectories at the very start of the main build
-          # This ensures they are built first and available to everything else
+          # 3. Force Version and Dependencies
+          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/cmake_minimum_required\(VERSION .*\)/cmake_minimum_required(VERSION 3.10)/g'
           sed -i '' '1i\
           add_subdirectory(thirdparty/fmt EXCLUDE_FROM_ALL)\
           add_subdirectory(thirdparty/curl EXCLUDE_FROM_ALL)\
           ' UnleashedRecomp/CMakeLists.txt
 
-          # Fix 'No SOURCES' target
+          # 4. Dummy target for Lib
           echo "void dummy_func() {}" > UnleashedRecompLib/ppc/dummy.cpp
           cat <<EOF > UnleashedRecompLib/CMakeLists.txt
           add_library(UnleashedRecompLib STATIC UnleashedRecompLib/ppc/dummy.cpp)
           target_include_directories(UnleashedRecompLib PUBLIC \${CMAKE_CURRENT_SOURCE_DIR}/ppc)
           EOF
 
-          # Kill the Generator Expression crash
+          # 5. Generator Fix & Shader Stubs
           find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/\$<TARGET_FILE:file_to_c>/\${file_to_c_EXECUTABLE}/g'
-
-          # Ghost Headers for shaders
           find . -name "*.hlsl" -exec touch {}.spirv.h \; 2>/dev/null || true
 
       - name: 4.0 - Building Host Tools (macOS)
         run: |
-          cmake -S . -B build_host -G Ninja -DPLATFORM_X64=ON -DGENERATE_SPIRV=OFF
+          cmake -S . -B build_host -G Ninja -DPLATFORM_X64=ON -DGENERATE_SPIRV=OFF -DMSDF_ATLAS_USE_SKIA=OFF -DMSDF_ATLAS_BUILD_STANDALONE=OFF
           cmake --build build_host --target file_to_c
 
       - name: 5.0 - Building Engine (A13/iPad 9/Metal)
@@ -69,14 +70,14 @@ jobs:
 
           cmake --build build_ios --parallel $(sysctl -n hw.ncpu)
 
-      - name: 6.0 - Packaging IPA (Final IPA)
+      - name: 6.0 - Packaging IPA (Immediate Export)
         run: |
           BIN_PATH=$(find build_ios -maxdepth 4 -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -name "file_to_c" | head -n 1)
           if [ -z "$BIN_PATH" ]; then exit 1; fi
-
           mkdir -p Payload/Unleashed.app
           cp "$BIN_PATH" Payload/Unleashed.app/UnleashedRecomp
           
+          # Minimal Plist for Speed
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -90,23 +91,16 @@ jobs:
               <key>UIFileSharingEnabled</key><true/>
               <key>LSSupportsOpeningDocumentsInPlace</key><true/>
               <key>UIRequiresFullScreen</key><true/>
-              <key>GCSupportedGameControllers</key><array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
               <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
               <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeRight</string></array>
           </dict></plist>
           EOF
           
-          cat <<EOF > Payload/Unleashed.app/config.toml
-          graphicsAPI = "Metal"
-          useJIT = false
-          enablePS4Touchpad = true
-          iPad9Optimization = true
-          EOF
-          
-          zip -ry Unleashed_Success_iPad9.ipa Payload
+          echo 'graphicsAPI = "Metal"\nuseJIT = false' > Payload/Unleashed.app/config.toml
+          zip -ry Unleashed_Victory.ipa Payload
 
       - name: 7.0 - Finalizing Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad9-Artifacts
-          path: Unleashed_Success_iPad9.ipa
+          name: Unleashed-Final-Build
+          path: Unleashed_Victory.ipa
