@@ -1,4 +1,4 @@
-name: Unleashed Recomp - Titan v18.2
+name: Unleashed Recomp - Titan v18.4
 on: [push, workflow_dispatch]
 
 jobs:
@@ -15,71 +15,79 @@ jobs:
           brew install ninja cmake shaderc glslang
           echo "/opt/homebrew/bin" >> $GITHUB_PATH
 
-      - name: 3.0 - Sovereign Surgery (The 10-Min Fix)
+      - name: 3.0 - The Lockdown Surgery
         run: |
           mkdir -p UnleashedRecompLib/ppc UnleashedRecompLib/private build_host build_ios
-
-          # 1. Kill the Version Script (This is what caused the last 'incomplete' error)
-          sed -i '' '/generate_version_info/d' UnleashedRecomp/CMakeLists.txt || true
-          touch UnleashedRecomp/version.h UnleashedRecomp/version.cpp
-
-          # 2. Force Path Injection
-          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/find_package\(fmt.*\)//g'
-          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/find_package\(CURL.*\)//g'
           
+          # Fix version headers
+          echo '#define RECOMP_VERSION "1.0.0"' > UnleashedRecomp/version.h
+          echo 'const char* recomp_version = "1.0.0";' > UnleashedRecomp/version.cpp
+          
+          # macOS sed requires an empty string for the -i extension
+          find . -name "CMakeLists.txt" -exec sed -i '' 's/generate_version_info.*//g' {} +
+          
+          # Inject dependencies into top-level CMake
           sed -i '' '1i\
           add_subdirectory(thirdparty/fmt EXCLUDE_FROM_ALL)\
           add_subdirectory(thirdparty/curl EXCLUDE_FROM_ALL)\
           ' CMakeLists.txt
 
-          # 3. Dummy Source & Generator Fix
-          echo "void dummy_func() {}" > UnleashedRecompLib/ppc/dummy.cpp
-          echo "add_library(UnleashedRecompLib STATIC UnleashedRecompLib/ppc/dummy.cpp)" > UnleashedRecompLib/CMakeLists.txt
-          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/\$<TARGET_FILE:file_to_c>/\${file_to_c_EXECUTABLE}/g'
-
       - name: 4.0 - Building Host Tools
         run: |
-          cmake -S . -B build_host -G Ninja -DPLATFORM_X64=ON -DGENERATE_SPIRV=OFF -DMSDF_ATLAS_USE_SKIA=OFF
+          cmake -S . -B build_host -G Ninja \
+            -DPLATFORM_X64=ON \
+            -DGENERATE_SPIRV=OFF \
+            -DMSDF_ATLAS_USE_SKIA=OFF
           cmake --build build_host --target file_to_c
 
-      - name: 5.0 - Building Engine (FINAL PUSH)
+      - name: 5.0 - Building Engine
         run: |
           cmake -S . -B build_ios -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_FLAGS="-O3" \
-            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DUSE_METAL=ON \
             -DPLATFORM_IOS=ON \
             -Dfile_to_c_EXECUTABLE=$(pwd)/build_host/file_to_c \
             -DPRIVATE_FILES_DIR="$(pwd)/UnleashedRecompLib/private"
-
           cmake --build build_ios --parallel $(sysctl -n hw.ncpu)
 
-      - name: 6.0 - Packaging IPA
+      - name: 6.0 - Packaging & Ad-Hoc Signing
         run: |
-          BIN_PATH=$(find build_ios -maxdepth 4 -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -name "file_to_c" | head -n 1)
+          # Find binary - exclude object files and tools
+          BIN_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -name "file_to_c" | head -n 1)
+          if [ -z "$BIN_PATH" ]; then echo "Binary not found" && exit 1; fi
+          
           mkdir -p Payload/Unleashed.app
           cp "$BIN_PATH" Payload/Unleashed.app/UnleashedRecomp
           
+          # Create Info.plist
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <plist version="1.0"><dict>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
               <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
               <key>CFBundleIdentifier</key><string>com.nerun.unleashed</string>
               <key>CFBundleName</key><string>Unleashed</string>
               <key>CFBundlePackageType</key><string>APPL</string>
-              <key>UIFileSharingEnabled</key><true/>
-              <key>GCSupportedGameControllers</key><array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>MinimumOSVersion</key><string>14.0</string>
               <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeRight</string></array>
-          </dict></plist>
+          </dict>
+          </plist>
           EOF
-          zip -ry Unleashed.ipa Payload
+          
+          # Ad-hoc sign the binary (required for iOS even for sideloading)
+          codesign --force --deep --sign - Payload/Unleashed.app
+          
+          zip -ry Unleashed_Final_Build.ipa Payload
 
-      - name: 7.0 - Final Artifact
+      - name: 7.0 - Delivering the Prize
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Final
-          path: Unleashed.ipa
+          name: Unleashed-Final-Build
+          path: Unleashed_Final_Build.ipa
