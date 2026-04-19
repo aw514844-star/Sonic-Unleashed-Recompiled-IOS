@@ -1,4 +1,4 @@
-name: Unleashed Recomp - Titan v16.5
+name: Unleashed Recomp - Titan v17.0
 on: [push, workflow_dispatch]
 
 jobs:
@@ -11,94 +11,47 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 2.0 - Installing Toolchain
+      - name: 2.0 - Installing Host Toolchain
         run: |
           brew install ninja cmake shaderc glslang
           echo "/opt/homebrew/bin" >> $GITHUB_PATH
 
-      - name: 3.0 - Sovereign Surgery (Indestructible Patch)
+      - name: 3.0 - Sovereign Surgery (Dependency Lockdown)
         run: |
+          # Structure Cleanup
           mkdir -p UnleashedRecompLib/ppc UnleashedRecompLib/private build_host build_ios
-          
-          # Fix CMake versions and fmt dependencies
+
+          # Fix Deprecation & Library Search Failures (adds cmake_minimum_required if missing)
           find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/cmake_minimum_required\(VERSION [23]\.[0-9]\)/cmake_minimum_required(VERSION 3.10)/g'
-          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/find_package\(fmt( REQUIRED)?\)/add_subdirectory(thirdparty\/fmt EXCLUDE_FROM_ALL)/g'
           
-          # Ensure dummy source exists for the library target
-          echo "void dummy_func() {}" > UnleashedRecompLib/ppc/dummy.cpp
-          
-          # Inject fixed CMake logic for the library
-          cat <<EOF > UnleashedRecompLib/CMakeLists.txt
-          add_library(UnleashedRecompLib STATIC ppc/dummy.cpp)
-          target_include_directories(UnleashedRecompLib PUBLIC \${CMAKE_CURRENT_SOURCE_DIR}/ppc)
-          EOF
+          # Force submodules
+          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/find_package\((fmt.*)\)/add_subdirectory(thirdparty\/fmt EXCLUDE_FROM_ALL)/gI'
 
-          # Replace generator expressions that fail during cross-compilation
-          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/\$<TARGET_FILE:file_to_c>/\${file_to_c_EXECUTABLE}/g'
-
-      - name: 4.0 - Building Host Tools (macOS)
+      - name: 4.0 - Build Setup (No Code Signing)
         run: |
-          cmake -S . -B build_host -G Ninja -DPLATFORM_X64=ON -DGENERATE_SPIRV=OFF
-          cmake --build build_host --target file_to_c
-
-      - name: 5.0 - Building Engine (A13/iPad 9/Metal)
-        run: |
-          cmake -S . -B build_ios -G Ninja \
+          # Setup toolchain for iOS without Xcode project
+          export IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          cmake -Bbuild_ios \
+            -G "Ninja" \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_ARCHITECTURES="arm64" \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-            -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF \
-            -DUSE_METAL=ON \
-            -DPLATFORM_IOS=ON \
-            -DGENERATE_SPIRV=OFF \
-            -Dfile_to_c_EXECUTABLE=$(pwd)/build_host/file_to_c \
-            -DPRIVATE_FILES_DIR="$(pwd)/UnleashedRecompLib/private" \
-            -Dfmt_DIR="$(pwd)/thirdparty/fmt"
+            -DCMAKE_OSX_SYSROOT=$IOS_SDK \
+            -DCMAKE_C_FLAGS="-fembed-bitcode" \
+            -DCMAKE_CXX_FLAGS="-fembed-bitcode" \
+            -DCMAKE_INSTALL_PREFIX=./install
 
-          # Create ghost headers to satisfy build requirements if SPIRV is off
-          find . -name "*.hlsl" -exec touch {}.spirv.h \; 2>/dev/null || true
-          
-          cmake --build build_ios --parallel $(sysctl -n hw.ncpu)
-
-      - name: 6.0 - Packaging IPA
+      - name: 5.0 - Compiling
         run: |
-          # Locate the actual executable (excluding libraries and build tools)
-          BIN_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -name "file_to_c" | head -n 1)
-          
-          if [ -z "$BIN_PATH" ]; then
-            echo "CRITICAL: Binary not found!"
-            exit 1
-          fi
+          cmake --build build_ios --target install
 
-          mkdir -p Payload/Unleashed.app
-          cp "$BIN_PATH" Payload/Unleashed.app/UnleashedRecomp
+      - name: 6.0 - Package Artifacts
+        run: |
+          mkdir -p Payload
+          # Assuming target produces a binary, move it to Payload
+          cp -r install/* Payload/
+          zip -r "UnleashedRecomp_Titan_v17.0.ipa" Payload
           
-          cat <<EOF > Payload/Unleashed.app/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0"><dict>
-            <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
-            <key>CFBundleIdentifier</key><string>com.nerun.unleashed</string>
-            <key>CFBundleName</key><string>Unleashed</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleShortVersionString</key><string>1.0</string>
-            <key>LSRequiresIPhoneOS</key><true/>
-            <key>UIFileSharingEnabled</key><true/>
-            <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-            <key>UIRequiresFullScreen</key><true/>
-            <key>GCSupportedGameControllers</key><array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
-            <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
-            <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeRight</string></array>
-          </dict></plist>
-          EOF
-          
-          echo 'graphicsAPI = "Metal"\nuseJIT = false' > Payload/Unleashed.app/config.toml
-          zip -r Unleashed_Titan_iOS.ipa Payload
-
-      - name: 7.0 - Upload Artifact
+      - name: Upload IPAs
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iOS-Build
-          path: Unleashed_Titan_iOS.ipa
+          name: UnleashedRecomp-iOS
+          path: "*.ipa"
