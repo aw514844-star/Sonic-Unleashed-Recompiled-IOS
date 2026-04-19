@@ -1,4 +1,4 @@
-name: Unleashed Recomp - Titan v17.2
+name: Unleashed Recomp - Titan v17.5
 on: [push, workflow_dispatch]
 
 jobs:
@@ -11,37 +11,39 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 2.0 - Installing Host Toolchain
+      - name: 2.0 - Installing Toolchain
         run: |
           brew install ninja cmake shaderc glslang
           echo "/opt/homebrew/bin" >> $GITHUB_PATH
 
-      - name: 3.0 - Sovereign Surgery (Indestructible Revision)
+      - name: 3.0 - Sovereign Surgery (Simplified No-Fail)
         run: |
-          # 1. Structure Cleanup & Case Sensitivity Fix
           mkdir -p UnleashedRecompLib/ppc UnleashedRecompLib/private build_host build_ios
 
-          # 2. Fix Deprecation (Standardized Versioning) - No syntax risk
-          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/cmake_minimum_required\(VERSION [23]\.[0-9](\.[0-9])?\)/cmake_minimum_required(VERSION 3.10)/g'
+          # Force every CMakeLists to a modern version to stop warnings
+          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/cmake_minimum_required\(VERSION .*\)/cmake_minimum_required(VERSION 3.10)/g'
 
-          # 3. Force Internal Dependencies (Safe Perl Syntax - Removed /I flag)
-          # This stops the script from looking for system CURL/FMT/Freetype
-          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/find_package\(fmt\)/add_subdirectory(thirdparty\/fmt EXCLUDE_FROM_ALL)/g'
-          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/find_package\(fmt REQUIRED\)/add_subdirectory(thirdparty\/fmt EXCLUDE_FROM_ALL)/g'
-          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/find_package\(CURL\)/add_subdirectory(thirdparty\/curl EXCLUDE_FROM_ALL)/g'
-          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/find_package\(Freetype\)/add_subdirectory(thirdparty\/freetype EXCLUDE_FROM_ALL)/g'
+          # Fix {fmt} - Remove the find_package line and add it manually
+          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/find_package\(fmt.*\)//g'
+          
+          # Add FMT and CURL as subdirectories at the very start of the main build
+          # This ensures they are built first and available to everything else
+          sed -i '' '1i\
+          add_subdirectory(thirdparty/fmt EXCLUDE_FROM_ALL)\
+          add_subdirectory(thirdparty/curl EXCLUDE_FROM_ALL)\
+          ' UnleashedRecomp/CMakeLists.txt
 
-          # 4. Fix 'No SOURCES' for the Lib target (Direct Overwrite)
+          # Fix 'No SOURCES' target
           echo "void dummy_func() {}" > UnleashedRecompLib/ppc/dummy.cpp
           cat <<EOF > UnleashedRecompLib/CMakeLists.txt
           add_library(UnleashedRecompLib STATIC UnleashedRecompLib/ppc/dummy.cpp)
           target_include_directories(UnleashedRecompLib PUBLIC \${CMAKE_CURRENT_SOURCE_DIR}/ppc)
           EOF
 
-          # 5. Kill Generator Expression Crash ($<TARGET_FILE:file_to_c>)
+          # Kill the Generator Expression crash
           find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/\$<TARGET_FILE:file_to_c>/\${file_to_c_EXECUTABLE}/g'
 
-          # 6. Header Ghosting (Shader Fail-safe)
+          # Ghost Headers for shaders
           find . -name "*.hlsl" -exec touch {}.spirv.h \; 2>/dev/null || true
 
       - name: 4.0 - Building Host Tools (macOS)
@@ -67,20 +69,14 @@ jobs:
 
           cmake --build build_ios --parallel $(sysctl -n hw.ncpu)
 
-      - name: 6.0 - Packaging IPA (The Shield)
+      - name: 6.0 - Packaging IPA (Final IPA)
         run: |
-          # Find the executable (ARM64 binary)
           BIN_PATH=$(find build_ios -maxdepth 4 -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -name "file_to_c" | head -n 1)
-          
-          if [ -z "$BIN_PATH" ]; then
-            echo "FAILURE: Engine binary not found."
-            exit 1
-          fi
+          if [ -z "$BIN_PATH" ]; then exit 1; fi
 
           mkdir -p Payload/Unleashed.app
           cp "$BIN_PATH" Payload/Unleashed.app/UnleashedRecomp
           
-          # Info.plist: Full Screen, File Sharing, PS4 Controller Support
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -100,7 +96,6 @@ jobs:
           </dict></plist>
           EOF
           
-          # config.toml: Force Metal, No-JIT, and Asset Detection
           cat <<EOF > Payload/Unleashed.app/config.toml
           graphicsAPI = "Metal"
           useJIT = false
@@ -108,10 +103,10 @@ jobs:
           iPad9Optimization = true
           EOF
           
-          zip -ry Unleashed_iPad9_Metal_v17.2.ipa Payload
+          zip -ry Unleashed_Success_iPad9.ipa Payload
 
       - name: 7.0 - Finalizing Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad9-Indestructible
-          path: Unleashed_iPad9_Metal_v17.2.ipa
+          name: Unleashed-iPad9-Artifacts
+          path: Unleashed_Success_iPad9.ipa
