@@ -1,4 +1,5 @@
-name: Unleashed Recomp - Titan v19.0 (Ultimate)
+name: Unleashed Recomp - Titan v19.2
+
 on: [push, workflow_dispatch]
 
 jobs:
@@ -15,33 +16,29 @@ jobs:
           brew install ninja cmake shaderc glslang
           echo "/opt/homebrew/bin" >> $GITHUB_PATH
 
-      - name: 3.0 - The Ultimate Surgery
+      - name: 3.0 - The Ghost Surgery (Corrected)
         run: |
           mkdir -p UnleashedRecompLib/ppc UnleashedRecompLib/private build_host build_ios
           
-          # 1. FORCE DELETE ALL "FIND_PACKAGE" CALLS
-          # This stops the 'Could not find fmt' and 'Could not find CURL' errors instantly.
-          find . -name "CMakeLists.txt" -exec sed -i '' '/find_package(fmt/d' {} +
-          find . -name "CMakeLists.txt" -exec sed -i '' '/find_package(CURL/d' {} +
-          find . -name "CMakeLists.txt" -exec sed -i '' '/find_package(SDL2/d' {} +
+          # 1. ALIAS FIX: Wipe the conflicting fmt folder
+          rm -rf tools/XenonRecomp/thirdparty/fmt
           
-          # 2. MANUALLY CREATE VERSION FILES
-          # This prevents the permission error at the end of configuration.
+          # 2. PERMISSION FIX: Manually create version files
+          mkdir -p UnleashedRecomp
           echo '#define RECOMP_VERSION "1.0.0"' > UnleashedRecomp/version.h
           echo 'const char* recomp_version = "1.0.0";' > UnleashedRecomp/version.cpp
+          
+          # 3. PATH FIX: MacOS sed requires '' for empty extension
+          find . -name "CMakeLists.txt" -exec sed -i '' '/find_package(fmt/d' {} +
+          find . -name "CMakeLists.txt" -exec sed -i '' '/find_package(CURL/d' {} +
           find . -name "CMakeLists.txt" -exec sed -i '' 's/generate_version_info.*//g' {} +
-
-          # 3. DIRECT LINKING
-          # Tells the game exactly where its parts are located.
-          find . -name "CMakeLists.txt" -exec sed -i '' 's/fmt::fmt/fmt/g' {} +
+          
+          # 4. INJECTION FIX: MacOS sed '1i' requires a newline after the command
+          # Added explicit path to root CMakeLists.txt to avoid double-injecting
           sed -i '' '1i\
           add_subdirectory(thirdparty/fmt EXCLUDE_FROM_ALL)\
           add_subdirectory(thirdparty/curl EXCLUDE_FROM_ALL)\
           ' CMakeLists.txt
-
-          # 4. SHADER PLACEHOLDERS
-          # Prevents the "spirv.h not found" error during the engine build.
-          find . -name "*.hlsl" -exec touch {}.spirv.h \; 2>/dev/null || true
 
       - name: 4.0 - Building Host Tools
         run: |
@@ -55,43 +52,55 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_FLAGS="-O3 -fPIC -Wno-everything" \
             -DUSE_METAL=ON \
             -DPLATFORM_IOS=ON \
             -DGENERATE_SPIRV=OFF \
             -Dfile_to_c_EXECUTABLE=$(pwd)/build_host/file_to_c \
-            -DPRIVATE_FILES_DIR="$(pwd)/UnleashedRecompLib/private" \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
-
+            -DPRIVATE_FILES_DIR="$(pwd)/UnleashedRecompLib/private"
           cmake --build build_ios --parallel $(sysctl -n hw.ncpu)
 
-      - name: 6.0 - Packaging (Ultimate)
+      - name: 6.0 - Packaging IPA
         run: |
-          # The Smart-Search looks for the finished executable in any subfolder
-          BIN_PATH=$(find build_ios -maxdepth 5 -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -name "file_to_c" | head -n 1)
-          if [ -z "$BIN_PATH" ]; then echo "Binary not found!" && exit 1; fi
+          # Robust binary search: looking for the main executable in the build folder
+          # Finds files with executable permissions, excluding static libs and build tools
+          BIN_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -name "file_to_c" ! -name "cmake_install.cmake" | head -n 1)
           
+          if [ -z "$BIN_PATH" ]; then
+            echo "Build failed to produce binary"
+            exit 1
+          fi
+          
+          echo "Found binary at: $BIN_PATH"
           mkdir -p Payload/Unleashed.app
           cp "$BIN_PATH" Payload/Unleashed.app/UnleashedRecomp
+          chmod +x Payload/Unleashed.app/UnleashedRecomp
           
-          # Custom Info.plist for iPad 9 support
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <plist version="1.0"><dict>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+          <plist version="1.0">
+          <dict>
             <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
             <key>CFBundleIdentifier</key><string>com.nerun.unleashed</string>
             <key>CFBundleName</key><string>Unleashed</string>
             <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
             <key>LSRequiresIPhoneOS</key><true/>
-            <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeRight</string></array>
-            <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>
-          </dict></plist>
+            <key>UISupportedInterfaceOrientations</key>
+            <array>
+              <string>UIInterfaceOrientationLandscapeRight</string>
+            </array>
+            <key>MinimumOSVersion</key><string>13.0</string>
+            <key>CFBundleSupportedPlatforms</key>
+            <array><string>iPhoneOS</string></array>
+          </dict>
+          </plist>
           EOF
           
-          zip -ry Unleashed_Ultimate.ipa Payload
+          zip -ry Unleashed_Final.ipa Payload
 
       - name: 7.0 - Final Delivery
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Ultimate
-          path: Unleashed_Ultimate.ipa
+          name: Unleashed-Final
+          path: Unleashed_Final.ipa
