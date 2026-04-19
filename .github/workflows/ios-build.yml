@@ -16,36 +16,30 @@ jobs:
           brew install ninja cmake shaderc glslang
           echo "/opt/homebrew/bin" >> $GITHUB_PATH
 
-      - name: Sovereign Surgery (No-Syntax Guarantee)
+      - name: Sovereign Surgery (Source Preparation)
         run: |
-          # 1. Setup lowercase private folder for assets
-          mkdir -p UnleashedRecompLib/ppc
-          mkdir -p UnleashedRecompLib/private
-          mkdir -p UnleashedRecomp/gpu/shader/hlsl
-          mkdir -p build_host build_ios
-
-          # 2. Force-overwrite the Library definition to avoid sed syntax errors
-          # This injects our dummy file directly into the target
+          mkdir -p UnleashedRecompLib/ppc UnleashedRecompLib/private build_host build_ios
+          
+          # Fix CMake definition for library stubs
           cat <<EOF > UnleashedRecompLib/CMakeLists.txt
           add_library(UnleashedRecompLib STATIC UnleashedRecompLib/ppc/dummy.cpp)
           target_include_directories(UnleashedRecompLib PUBLIC \${CMAKE_CURRENT_SOURCE_DIR}/ppc)
           EOF
 
-          # 3. Create dummy source and stubs
           echo "void dummy_func() {}" > UnleashedRecompLib/ppc/dummy.cpp
           echo "// config" > UnleashedRecompLib/ppc/ppc_config.h
           
-          # 4. Strip Generator Expressions that cause crashes
-          # We use '|' as a delimiter to prevent path-slashes from breaking the command
-          find . -name "CMakeLists.txt" -exec sed -i '' 's|\$<TARGET_FILE:file_to_c>|${file_to_c_EXECUTABLE}|g' {} +
+          # Replace generator expressions for the host tool path
+          find . -name "CMakeLists.txt" -print0 | xargs -0 perl -pi -e 's/\$<TARGET_FILE:file_to_c>/\${file_to_c_EXECUTABLE}/g'
 
       - name: Stage 1: Build Host Tool (macOS)
         run: |
           cmake -S . -B build_host -G Ninja -DPLATFORM_X64=ON -DGENERATE_SPIRV=OFF
           cmake --build build_host --target file_to_c
 
-      - name: Stage 2: Build Engine (iPad 9 / Metal / A13 Optimization)
+      - name: Stage 2: Build Engine (iOS / Metal)
         run: |
+          # Explicitly disable all code signing in CMake and for the underlying build system
           cmake -S . -B build_ios -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="arm64" \
@@ -56,27 +50,30 @@ jobs:
             -DUSE_METAL=ON \
             -DPLATFORM_IOS=ON \
             -DGENERATE_SPIRV=OFF \
-            -DSDL_HINT_JOYSTICK_HIDAPI_PS4=1 \
             -Dfile_to_c_EXECUTABLE=$(pwd)/build_host/file_to_c \
-            -DPRIVATE_FILES_DIR="$(pwd)/UnleashedRecompLib/private"
+            -DPRIVATE_FILES_DIR="$(pwd)/UnleashedRecompLib/private" \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=""
 
-          # Fix missing shader headers for the build tree
+          # Generate necessary dummy shader headers if they don't exist
           find build_ios -name "*.hlsl" -exec touch {}.spirv.h \; 2>/dev/null || true
           
           cmake --build build_ios --parallel $(sysctl -n hw.ncpu)
 
       - name: IPA Export (Hardware Optimized)
         run: |
-          BINARY=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -name "file_to_c" | head -n 1)
-          if [ -z "$BINARY" ]; then exit 1; fi
+          # Locate the main executable while ignoring libraries and tools
+          BINARY=$(find build_ios -maxdepth 3 -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -name "file_to_c" | head -n 1)
+          if [ -z "$BINARY" ]; then echo "Build failed: Binary not found"; exit 1; fi
 
           mkdir -p Payload/Unleashed.app
           cp "$BINARY" Payload/Unleashed.app/UnleashedRecomp
           
-          # Info.plist: Full Screen, PS4 Support, and File Sharing
+          # Info.plist for app definitions (iPad/Metal/PS4 Support)
           cat <<EOF > Payload/Unleashed.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
           <plist version="1.0">
           <dict>
               <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
@@ -95,7 +92,7 @@ jobs:
           </plist>
           EOF
           
-          # config.toml: Metal, No-JIT, and PS4 Optimizations
+          # Internal config for the recomp engine
           cat <<EOF > Payload/Unleashed.app/config.toml
           graphicsAPI = "Metal"
           useJIT = false
@@ -103,10 +100,10 @@ jobs:
           iPad9Optimization = true
           EOF
           
-          zip -ry Unleashed_iPad9_Metal_v14.5.ipa Payload
+          zip -ry Unleashed_iPad9_Metal_v14.5_Unsigned.ipa Payload
 
       - name: Upload Build
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iPad9-Metal
-          path: Unleashed_iPad9_Metal_v14.5.ipa
+            name: Unleashed-iPad9-Metal-Unsigned
+            path: Unleashed_iPad9_Metal_v14.5_Unsigned.ipa
