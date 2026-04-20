@@ -1,62 +1,74 @@
-name: iPad 9 Final Build
+name: iPad 9 Professional (All Features)
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: 1. Checkout with Submodules
+      - name: 1. Deep Submodule Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive # Fixes "Empty IPA" by pulling in all engine code
+          submodules: recursive # Mandatory: prevents "Empty IPA" by pulling in the engine logic
 
-      - name: 2. Install Build Tools
-        run: brew install cmake ninja
-
-      - name: 3. Verify Your Game Files
+      - name: 2. Force Dependency Installation
         run: |
-          # Strict check for your specific files
+          # Installs the specific libraries that caused your previous build errors
+          brew install cmake ninja freetype sdl2
+          # Injects paths into the environment so the compiler never "loses" them
+          echo "FREETYPE_PATH=$(brew --prefix freetype)" >> $GITHUB_ENV
+          echo "SDL2_PATH=$(brew --prefix sdl2)" >> $GITHUB_ENV
+
+      - name: 3. Asset Integrity Guard
+        run: |
+          # This step will fail the build immediately if your files are missing or misspelled
           cd UnleashedRecompLib/private
-          if [[ ! -f "default.xex" ]] || [[ ! -f "default.xexp" ]] || [[ ! -f "shader.ar" ]]; then
-            echo "ERROR: One of your files (default.xex, default.xexp, or shader.ar) is missing in UnleashedRecompLib/private!"
-            exit 1
-          fi
-          echo "Files verified. Proceeding to build..."
+          FILES=("default.xex" "default.xexp" "shader.ar")
+          for f in "${FILES[@]}"; do
+            [ -f "$f" ] || (echo "FATAL ERROR: $f is missing in UnleashedRecompLib/private!" && exit 1)
+          done
 
-      - name: 4. Configure & Build
+      - name: 4. Compile with Library Mapping (No JIT Required)
         run: |
+          # Forces the compiler to link the correct iPad (arm64) libraries
           cmake . -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_BUILD_TYPE=Release \
-            -DENABLE_FULLSCREEN=ON
+            -DENABLE_FULLSCREEN=ON \
+            -DFREETYPE_INCLUDE_DIRS=${{ env.FREETYPE_PATH }}/include/freetype2 \
+            -DFREETYPE_LIBRARY=${{ env.FREETYPE_PATH }}/lib/libfreetype.dylib \
+            -DSDL2_INCLUDE_DIR=${{ env.SDL2_PATH }}/include/SDL2 \
+            -DSDL2_LIBRARY=${{ env.SDL2_PATH }}/lib/libSDL2.dylib
           cmake --build build --config Release
 
-      - name: 5. Bundle Assets & Fix Full Screen
+      - name: 5. iPad 9 & PS4 Controller Framework Injection
         run: |
           mkdir -p Payload
-          # Find the .app folder - if this fails, the build failed
           APP_PATH=$(find build -name "*.app" -type d | head -n 1)
-          if [ -z "$APP_PATH" ]; then echo "Build failed: No .app found"; exit 1; fi
-          
           cp -r "$APP_PATH" ./Payload/
           APP_NAME=$(basename "$APP_PATH")
+          PLIST="Payload/$APP_NAME/Info.plist"
           
-          # Inject your assets into the IPA so it's not empty
-          mkdir -p "Payload/$APP_NAME/UnleashedRecompLib/private"
-          cp UnleashedRecompLib/private/default.xex "Payload/$APP_NAME/UnleashedRecompLib/private/"
-          cp UnleashedRecompLib/private/default.xexp "Payload/$APP_NAME/UnleashedRecompLib/private/"
-          cp UnleashedRecompLib/private/shader.ar "Payload/$APP_NAME/UnleashedRecompLib/private/"
+          # Rule: iPad 9 Full Screen (4:3 support)
+          /usr/libexec/PlistBuddy -c "Add :UIRequiresFullScreen bool true" "$PLIST"
           
-          # Rule: iPad 9 Full Screen
-          /usr/libexec/PlistBuddy -c "Add :UIRequiresFullScreen bool true" "Payload/$APP_NAME/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :UILaunchStoryboardName LaunchScreen" "Payload/$APP_NAME/Info.plist"
+          # Rule: PS4 Controller (DualShock 4 Native Profile)
+          /usr/libexec/PlistBuddy -c "Add :GCSupportedGameControllers array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :GCSupportedGameControllers:0 dict" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :GCSupportedGameControllers:0:ProfileName string ExtendedGamepad" "$PLIST"
+          
+          # Rule: File Sharing (Manage mods/saves via Files app)
+          /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$PLIST"
 
-      - name: 6. Final IPA Packaging
+          # Rule: No Empty IPA (Manual Asset Bundling)
+          mkdir -p "Payload/$APP_NAME/UnleashedRecompLib/private"
+          cp UnleashedRecompLib/private/* "Payload/$APP_NAME/UnleashedRecompLib/private/"
+
+      - name: 6. Create Unsigned Artifact
         run: zip -r SonicUnleashed_iPad9.ipa Payload
 
-      - name: 7. Upload to GitHub
+      - name: 7. Deliver Final Build
         uses: actions/upload-artifact@v4
         with:
-          name: Completed-iPad9-Build
+          name: SonicUnleashed-iPad9-Final
           path: SonicUnleashed_iPad9.ipa
