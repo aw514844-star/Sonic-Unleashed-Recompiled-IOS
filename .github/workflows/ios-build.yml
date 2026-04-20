@@ -1,4 +1,4 @@
-name: iPad 9 Professional (Success Guard)
+name: Unleashed Recomp IOS
 on: [push, workflow_dispatch]
 
 jobs:
@@ -10,24 +10,32 @@ jobs:
         with:
           submodules: recursive
 
-      - name: 2. Install All Missing Dependencies
+      - name: 2. Install Dependencies
         run: |
-          # Adding CURL and FMT to the installation list to fix your specific error
-          brew install cmake ninja freetype sdl2 curl fmt
+          brew install cmake ninja freetype sdl2 curl fmt glslang
           echo "FREETYPE_DIR=$(brew --prefix freetype)" >> $GITHUB_ENV
           echo "SDL2_DIR=$(brew --prefix sdl2)" >> $GITHUB_ENV
           echo "CURL_DIR=$(brew --prefix curl)" >> $GITHUB_ENV
           echo "FMT_DIR=$(brew --prefix fmt)" >> $GITHUB_ENV
 
-      - name: 3. Asset Integrity Guard
+      - name: 3. Pre-Compile SPIR-V Shaders
         run: |
-          cd UnleashedRecompLib/private
-          ls default.xex default.xexp shader.ar || (echo "Missing files!" && exit 1)
+          # This step generates the missing .spirv.h headers required by the iOS build path.
+          # We find every HLSL file and compile it into a C header format.
+          SHADER_DIR="UnleashedRecomp/gpu/shader/hlsl"
+          mkdir -p "$SHADER_DIR"
+          
+          for shader in $SHADER_DIR/*.hlsl; do
+            echo "Compiling $shader..."
+            # -V: Vulkan/SPIR-V mode
+            # -x: Save as 32-bit hex strings in a header
+            # --vn: Variable name used in the generated C header
+            VAR_NAME=$(basename "$shader" .hlsl | sed 's/-/_/g')_spirv
+            glslangValidator -V "$shader" -o "$shader.spirv.h" --vn "$VAR_NAME"
+          done
 
       - name: 4. Compile (FORCED SUCCESS PATH)
         run: |
-          # 1. We disable signing (-DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF)
-          # 2. We manually point to CURL, FMT, and Freetype so CMake cannot fail
           cmake . -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -40,7 +48,8 @@ jobs:
             -DCURL_LIBRARY=$(brew --prefix curl)/lib/libcurl.dylib \
             -Dfmt_DIR=$(brew --prefix fmt)/lib/cmake/fmt \
             -DSDL2_INCLUDE_DIR=$(brew --prefix sdl2)/include/SDL2 \
-            -DSDL2_LIBRARY=$(brew --prefix sdl2)/lib/libSDL2.dylib
+            -DSDL2_LIBRARY=$(brew --prefix sdl2)/lib/libSDL2.dylib \
+            -DGLSLANG_VALIDATOR_EXE=$(which glslangValidator)
           
           cmake --build build --config Release
 
@@ -52,12 +61,14 @@ jobs:
           APP_NAME=$(basename "$APP_PATH")
           PLIST="Payload/$APP_NAME/Info.plist"
           
+          # Force Fullscreen & Enable PS4/Gamepad support
           /usr/libexec/PlistBuddy -c "Add :UIRequiresFullScreen bool true" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :GCSupportedGameControllers array" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :GCSupportedGameControllers:0 dict" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :GCSupportedGameControllers:0:ProfileName string ExtendedGamepad" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$PLIST"
 
+          # Inject private assets into the app bundle
           mkdir -p "Payload/$APP_NAME/UnleashedRecompLib/private"
           cp UnleashedRecompLib/private/* "Payload/$APP_NAME/UnleashedRecompLib/private/"
 
