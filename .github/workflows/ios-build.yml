@@ -1,106 +1,62 @@
-name: Unleashed Recomp - Titan v19.2
-
+name: iPad 9 Final Build
 on: [push, workflow_dispatch]
 
 jobs:
-  build-ios:
+  build:
     runs-on: macos-latest
     steps:
-      - name: 1.0 - Initializing Environment
+      - name: 1. Checkout with Submodules
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: recursive # Fixes "Empty IPA" by pulling in all engine code
 
-      - name: 2.0 - Installing Toolchain
-        run: |
-          brew install ninja cmake shaderc glslang
-          echo "/opt/homebrew/bin" >> $GITHUB_PATH
+      - name: 2. Install Build Tools
+        run: brew install cmake ninja
 
-      - name: 3.0 - The Ghost Surgery (Corrected)
+      - name: 3. Verify Your Game Files
         run: |
-          mkdir -p UnleashedRecompLib/ppc UnleashedRecompLib/private build_host build_ios
-          
-          # 1. ALIAS FIX: Wipe the conflicting fmt folder
-          rm -rf tools/XenonRecomp/thirdparty/fmt
-          
-          # 2. PERMISSION FIX: Manually create version files
-          mkdir -p UnleashedRecomp
-          echo '#define RECOMP_VERSION "1.0.0"' > UnleashedRecomp/version.h
-          echo 'const char* recomp_version = "1.0.0";' > UnleashedRecomp/version.cpp
-          
-          # 3. PATH FIX: MacOS sed requires '' for empty extension
-          find . -name "CMakeLists.txt" -exec sed -i '' '/find_package(fmt/d' {} +
-          find . -name "CMakeLists.txt" -exec sed -i '' '/find_package(CURL/d' {} +
-          find . -name "CMakeLists.txt" -exec sed -i '' 's/generate_version_info.*//g' {} +
-          
-          # 4. INJECTION FIX: MacOS sed '1i' requires a newline after the command
-          # Added explicit path to root CMakeLists.txt to avoid double-injecting
-          sed -i '' '1i\
-          add_subdirectory(thirdparty/fmt EXCLUDE_FROM_ALL)\
-          add_subdirectory(thirdparty/curl EXCLUDE_FROM_ALL)\
-          ' CMakeLists.txt
-
-      - name: 4.0 - Building Host Tools
-        run: |
-          cmake -S . -B build_host -G Ninja -DPLATFORM_X64=ON -DGENERATE_SPIRV=OFF -DMSDF_ATLAS_USE_SKIA=OFF
-          cmake --build build_host --target file_to_c
-
-      - name: 5.0 - Building Engine (A13 Optimized)
-        run: |
-          cmake -S . -B build_ios -G Ninja \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_ARCHITECTURES="arm64" \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DUSE_METAL=ON \
-            -DPLATFORM_IOS=ON \
-            -DGENERATE_SPIRV=OFF \
-            -Dfile_to_c_EXECUTABLE=$(pwd)/build_host/file_to_c \
-            -DPRIVATE_FILES_DIR="$(pwd)/UnleashedRecompLib/private"
-          cmake --build build_ios --parallel $(sysctl -n hw.ncpu)
-
-      - name: 6.0 - Packaging IPA
-        run: |
-          # Robust binary search: looking for the main executable in the build folder
-          # Finds files with executable permissions, excluding static libs and build tools
-          BIN_PATH=$(find build_ios -type f -perm +111 ! -name "*.a" ! -name "*.dylib" ! -name "file_to_c" ! -name "cmake_install.cmake" | head -n 1)
-          
-          if [ -z "$BIN_PATH" ]; then
-            echo "Build failed to produce binary"
+          # Strict check for your specific files
+          cd UnleashedRecompLib/private
+          if [[ ! -f "default.xex" ]] || [[ ! -f "default.xexp" ]] || [[ ! -f "shader.ar" ]]; then
+            echo "ERROR: One of your files (default.xex, default.xexp, or shader.ar) is missing in UnleashedRecompLib/private!"
             exit 1
           fi
-          
-          echo "Found binary at: $BIN_PATH"
-          mkdir -p Payload/Unleashed.app
-          cp "$BIN_PATH" Payload/Unleashed.app/UnleashedRecomp
-          chmod +x Payload/Unleashed.app/UnleashedRecomp
-          
-          cat <<EOF > Payload/Unleashed.app/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleExecutable</key><string>UnleashedRecomp</string>
-            <key>CFBundleIdentifier</key><string>com.nerun.unleashed</string>
-            <key>CFBundleName</key><string>Unleashed</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleShortVersionString</key><string>1.0</string>
-            <key>LSRequiresIPhoneOS</key><true/>
-            <key>UISupportedInterfaceOrientations</key>
-            <array>
-              <string>UIInterfaceOrientationLandscapeRight</string>
-            </array>
-            <key>MinimumOSVersion</key><string>13.0</string>
-            <key>CFBundleSupportedPlatforms</key>
-            <array><string>iPhoneOS</string></array>
-          </dict>
-          </plist>
-          EOF
-          
-          zip -ry Unleashed_Final.ipa Payload
+          echo "Files verified. Proceeding to build..."
 
-      - name: 7.0 - Final Delivery
+      - name: 4. Configure & Build
+        run: |
+          cmake . -B build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_FULLSCREEN=ON
+          cmake --build build --config Release
+
+      - name: 5. Bundle Assets & Fix Full Screen
+        run: |
+          mkdir -p Payload
+          # Find the .app folder - if this fails, the build failed
+          APP_PATH=$(find build -name "*.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then echo "Build failed: No .app found"; exit 1; fi
+          
+          cp -r "$APP_PATH" ./Payload/
+          APP_NAME=$(basename "$APP_PATH")
+          
+          # Inject your assets into the IPA so it's not empty
+          mkdir -p "Payload/$APP_NAME/UnleashedRecompLib/private"
+          cp UnleashedRecompLib/private/default.xex "Payload/$APP_NAME/UnleashedRecompLib/private/"
+          cp UnleashedRecompLib/private/default.xexp "Payload/$APP_NAME/UnleashedRecompLib/private/"
+          cp UnleashedRecompLib/private/shader.ar "Payload/$APP_NAME/UnleashedRecompLib/private/"
+          
+          # Rule: iPad 9 Full Screen
+          /usr/libexec/PlistBuddy -c "Add :UIRequiresFullScreen bool true" "Payload/$APP_NAME/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :UILaunchStoryboardName LaunchScreen" "Payload/$APP_NAME/Info.plist"
+
+      - name: 6. Final IPA Packaging
+        run: zip -r SonicUnleashed_iPad9.ipa Payload
+
+      - name: 7. Upload to GitHub
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-Final
-          path: Unleashed_Final.ipa
+          name: Completed-iPad9-Build
+          path: SonicUnleashed_iPad9.ipa
