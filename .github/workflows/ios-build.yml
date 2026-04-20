@@ -1,4 +1,4 @@
-name: iPad 9 Professional (Success Guard)
+name: Sonic Unleashed Recomp IOS
 on: [push, workflow_dispatch]
 
 jobs:
