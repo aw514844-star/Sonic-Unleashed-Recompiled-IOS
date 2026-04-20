@@ -1,4 +1,4 @@
-name: Sonic Unleashed Recomp IOS
+name: iPad 9 Professional (Success Guard)
 on: [push, workflow_dispatch]
 
 jobs:
@@ -18,18 +18,19 @@ jobs:
           echo "CURL_DIR=$(brew --prefix curl)" >> $GITHUB_ENV
           echo "FMT_DIR=$(brew --prefix fmt)" >> $GITHUB_ENV
 
-      - name: 3. Asset Integrity & Shader Pre-Compilation
+      - name: 3. Asset Integrity & Shader Pre-Compilation (Fixed Syntax)
         run: |
-          # Verify private files exist for the static recompiler
+          # Verify private files exist
           cd UnleashedRecompLib/private
           ls default.xex default.xexp shader.ar || (echo "Missing XEX/AR files!" && exit 1)
           cd ../..
 
           # SPIR-V Header Generation Logic
-          # Maps .hlsl to .spirv.h with correct stage flags
           SHADER_DIR="UnleashedRecomp/gpu/shader/hlsl"
+          INCLUDE_DIR="UnleashedRecomp/gpu/shader" # Assuming common headers are here
+          
           for shader in $SHADER_DIR/*.hlsl; do
-            echo "Compiling $shader..."
+            echo "Compiling HLSL $shader..."
             
             if [[ "$shader" == *"_vs.hlsl" ]]; then
               STAGE="vert"
@@ -41,12 +42,20 @@ jobs:
 
             VAR_NAME=$(basename "$shader" .hlsl | sed 's/-/_/g')_spirv
             
-            glslangValidator -V -S "$STAGE" "$shader" -o "$shader.spirv.h" --vn "$VAR_NAME" -x
+            # -D: Force HLSL input
+            # -I: Include path for #include directives
+            # -e: Entry point (Standard is 'main' for these recomp shaders)
+            # --hlsl-offsets: Ensures proper memory layout
+            # -g: Optional debug info (remove if IPA size is an issue)
+            glslangValidator -V -D -S "$STAGE" \
+              -I"$INCLUDE_DIR" \
+              -e main \
+              --hlsl-offsets \
+              "$shader" -o "$shader.spirv.h" --vn "$VAR_NAME" -x
           done
 
       - name: 4. Compile (FORCED SUCCESS PATH)
         run: |
-          # Pure CLI build: Bypassing Xcode for Ninja performance
           cmake . -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -72,18 +81,12 @@ jobs:
           APP_NAME=$(basename "$APP_PATH")
           PLIST="Payload/$APP_NAME/Info.plist"
           
-          # Force Fullscreen & Lock Orientation for iPad 9
           /usr/libexec/PlistBuddy -c "Add :UIRequiresFullScreen bool true" "$PLIST"
-          
-          # Native DualShock 4 Support
           /usr/libexec/PlistBuddy -c "Add :GCSupportedGameControllers array" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :GCSupportedGameControllers:0 dict" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :GCSupportedGameControllers:0:ProfileName string ExtendedGamepad" "$PLIST"
-          
-          # Enable Files App Access
           /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$PLIST"
 
-          # Inject private assets into the final bundle
           mkdir -p "Payload/$APP_NAME/UnleashedRecompLib/private"
           cp UnleashedRecompLib/private/* "Payload/$APP_NAME/UnleashedRecompLib/private/"
 
