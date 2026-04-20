@@ -1,9 +1,9 @@
-name: Unleashed Recomp IOS
+name: Sonic Unleashed Recomp IOS
 on: [push, workflow_dispatch]
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-runs-on: macos-latest
     steps:
       - name: 1. Deep Checkout
         uses: actions/checkout@v4
@@ -18,20 +18,34 @@ jobs:
           echo "CURL_DIR=$(brew --prefix curl)" >> $GITHUB_ENV
           echo "FMT_DIR=$(brew --prefix fmt)" >> $GITHUB_ENV
 
-      - name: 3. Pre-Compile SPIR-V Shaders
+      - name: 3. Asset Integrity & Shader Pre-Compilation
         run: |
-          # This step generates the missing .spirv.h headers required by the iOS build path.
-          # We find every HLSL file and compile it into a C header format.
+          # Verify private files first
+          cd UnleashedRecompLib/private
+          ls default.xex default.xexp shader.ar || (echo "Missing XEX/AR files!" && exit 1)
+          cd ../..
+
+          # Fix for SPIR-V header error: Auto-detect shader stages
           SHADER_DIR="UnleashedRecomp/gpu/shader/hlsl"
-          mkdir -p "$SHADER_DIR"
-          
           for shader in $SHADER_DIR/*.hlsl; do
             echo "Compiling $shader..."
-            # -V: Vulkan/SPIR-V mode
-            # -x: Save as 32-bit hex strings in a header
-            # --vn: Variable name used in the generated C header
+            
+            # Determine stage based on filename
+            if [[ "$shader" == *"_vs.hlsl" ]]; then
+              STAGE="vert"
+            elif [[ "$shader" == *"_ps.hlsl" ]]; then
+              STAGE="frag"
+            else
+              STAGE="frag" # Default fallback for general hlsl
+            fi
+
             VAR_NAME=$(basename "$shader" .hlsl | sed 's/-/_/g')_spirv
-            glslangValidator -V "$shader" -o "$shader.spirv.h" --vn "$VAR_NAME"
+            
+            # -V: Vulkan/SPIR-V
+            # -S: Set stage explicitly
+            # -x: Hex output (as C array)
+            # --vn: Variable name for the header
+            glslangValidator -V -S "$STAGE" "$shader" -o "$shader.spirv.h" --vn "$VAR_NAME" -x
           done
 
       - name: 4. Compile (FORCED SUCCESS PATH)
@@ -61,14 +75,12 @@ jobs:
           APP_NAME=$(basename "$APP_PATH")
           PLIST="Payload/$APP_NAME/Info.plist"
           
-          # Force Fullscreen & Enable PS4/Gamepad support
           /usr/libexec/PlistBuddy -c "Add :UIRequiresFullScreen bool true" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :GCSupportedGameControllers array" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :GCSupportedGameControllers:0 dict" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :GCSupportedGameControllers:0:ProfileName string ExtendedGamepad" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$PLIST"
 
-          # Inject private assets into the app bundle
           mkdir -p "Payload/$APP_NAME/UnleashedRecompLib/private"
           cp UnleashedRecompLib/private/* "Payload/$APP_NAME/UnleashedRecompLib/private/"
 
