@@ -1,15 +1,19 @@
 name: ios-build
+
 on:
   workflow_dispatch:
     inputs:
       configuration:
-        description: Xcode configuration (Use Release for iPad 9 performance)
+        description: Xcode configuration to archive
         required: true
         default: Release
         type: choice
-        options: [Release, RelWithDebInfo, Debug]
+        options:
+          - Release
+          - RelWithDebInfo
+          - Debug
       ref:
-        description: Git ref to build
+        description: Optional git ref to build
         required: false
         default: ""
         type: string
@@ -22,6 +26,7 @@ jobs:
   generate-spirv:
     name: Generate SPIR-V Headers
     runs-on: windows-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -31,26 +36,20 @@ jobs:
 
       - name: Generate SPIR-V Headers
         shell: pwsh
-        run: |
-          $scriptPath = "${{ github.workspace }}\scripts\ci\generate-spirv-headers.ps1"
-          if (Test-Path $scriptPath) {
-            # Bypass policy to ensure the script isn't blocked by Windows
-            powershell.exe -ExecutionPolicy Bypass -File $scriptPath
-          } else {
-            Write-Error "Script not found at $scriptPath. Please check your folder structure."
-            exit 1
-          }
+        run: ./scripts/ci/generate-spirv-headers.ps1
 
       - name: Upload SPIR-V Headers
         uses: actions/upload-artifact@v4
         with:
           name: spirv-headers
           path: ./.artifacts/spirv-headers
+          if-no-files-found: error
 
   build-ios:
-    name: Build iOS (iPad 9 Optimized)
-    runs-on: macos-14
+    name: Build iOS Archive
+    runs-on: macos-26
     needs: generate-spirv
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -58,19 +57,29 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
           submodules: recursive
 
-      - name: Install Dependencies
-        run: brew install cmake ninja pkg-config
+      - name: Install Build Dependencies
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install cmake ninja pkg-config curl freetype sdl2
 
-      - name: Apply iPad 9 & Controller Patches
+      - name: Validate Private File Secrets
+        env:
+          PRIVATE_DEFAULT_XEX_B64: ${{ secrets.PRIVATE_DEFAULT_XEX_B64 }}
+          PRIVATE_DEFAULT_XEXP_B64: ${{ secrets.PRIVATE_DEFAULT_XEXP_B64 }}
+          PRIVATE_SHADER_AR_B64: ${{ secrets.PRIVATE_SHADER_AR_B64 }}
         run: |
-          # 1. Enable File Sharing (iTunes/Files App)
-          find . -name "Info.plist" -exec sed -i '' '/<dict>/a \
-          <key>UIFileSharingEnabled</key><true/>\
-          <key>LSSupportsOpeningDocumentsInPlace</key><true/>' {} +
-
-          # 2. Optimization Flags for iPad 9 (A13 Chip)
-          export CFLAGS="-O3 -mtune=apple-a13"
-          export CXXFLAGS="-O3 -mtune=apple-a13"
+          set -euo pipefail
+          if [[ -f ./UnleashedRecompLib/private/default.xex && -f ./UnleashedRecompLib/private/default.xexp && -f ./UnleashedRecompLib/private/shader.ar ]]; then
+            echo "Using private files already present in the repository checkout."
+            exit 0
+          fi
+          for name in PRIVATE_DEFAULT_XEX_B64 PRIVATE_DEFAULT_XEXP_B64 PRIVATE_SHADER_AR_B64; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing required secret ${name}, and private files are not present in the repository checkout." >&2
+              exit 1
+            fi
+          done
 
       - name: Stage Private Assets
         env:
@@ -78,25 +87,46 @@ jobs:
           PRIVATE_DEFAULT_XEXP_B64: ${{ secrets.PRIVATE_DEFAULT_XEXP_B64 }}
           PRIVATE_SHADER_AR_B64: ${{ secrets.PRIVATE_SHADER_AR_B64 }}
         run: |
+          set -euo pipefail
           mkdir -p ./UnleashedRecompLib/private
-          echo "${PRIVATE_DEFAULT_XEX_B64}" | base64 --decode > ./UnleashedRecompLib/private/default.xex
-          echo "${PRIVATE_DEFAULT_XEXP_B64}" | base64 --decode > ./UnleashedRecompLib/private/default.xexp
-          echo "${PRIVATE_SHADER_AR_B64}" | base64 --decode > ./UnleashedRecompLib/private/shader.ar
+          if [[ -f ./UnleashedRecompLib/private/default.xex && -f ./UnleashedRecompLib/private/default.xexp && -f ./UnleashedRecompLib/private/shader.ar ]]; then
+            echo "Private files already staged in repository checkout."
+            exit 0
+          fi
+          printf '%s' "${PRIVATE_DEFAULT_XEX_B64}" | base64 --decode > ./UnleashedRecompLib/private/default.xex
+          printf '%s' "${PRIVATE_DEFAULT_XEXP_B64}" | base64 --decode > ./UnleashedRecompLib/private/default.xexp
+          printf '%s' "${PRIVATE_SHADER_AR_B64}" | base64 --decode > ./UnleashedRecompLib/private/shader.ar
 
-      - name: Prepare Host Tools & Recompile
+      - name: Prepare Host-Generated Sources
         run: |
-          cmake . --preset macos-release -DSDL2MIXER_VORBIS=VORBISFILE
-          cmake --build ./out/build/macos-release --target XenonRecomp x_decompress XenosRecomp file_to_c --parallel $(sysctl -n hw.ncpu)
+          set -euo pipefail
           
+          # 1. Map specialized curl/freetype resolution as dictated by the Bible document
+          CURL_LIB="$(brew --prefix curl)/lib/libcurl.dylib"
+          FT_INC="$(brew --prefix freetype)/include/freetype2"
+          
+          # 2. Fire the host build targeting macOS to run the compilation tools
+          cmake . --preset macos-release \
+            -DSDL2MIXER_VORBIS=VORBISFILE \
+            -DCURL_LIBRARY="$CURL_LIB" \
+            -Ddfreetype_include_dirs="$FT_INC" \
+            -DENABLE_GENERATIONS_CONTROLS=ON \
+            -DENABLE_MOBILE_TOUCH_CONTROLS=ON
+            
+          cmake --build ./out/build/macos-release --target XenonRecomp x_decompress XenosRecomp file_to_c --parallel 3
+          
+          # 3. Static recompilation pipeline (Xbox 360 PPC -> ARM64)
           pushd ./out/build/macos-release/UnleashedRecompLib
-          ../tools/XenonRecomp/XenonRecomp/XenonRecomp || true
+          ../tools/XenonRecomp/XenonRecomp/XenonRecomp 2>&1 | tee "${RUNNER_TEMP}/xenonrecomp.log"
+          
           ../tools/x_decompress/x_decompress \
             "${GITHUB_WORKSPACE}/UnleashedRecompLib/private/shader.ar" \
             "${GITHUB_WORKSPACE}/UnleashedRecompLib/private/shader_decompressed.ar"
-          ../tools/XenosRecomp/XenosRecomp/XenosRecomp || true
+            
+          ../tools/XenosRecomp/XenosRecomp/XenosRecomp 2>&1 | tee "${RUNNER_TEMP}/xenosrecomp.log"
           popd
           
-          cmake --build ./out/build/macos-release --target UnleashedRecomp --parallel $(sysctl -n hw.ncpu)
+          cmake --build ./out/build/macos-release --target UnleashedRecomp --parallel 3 --verbose
 
       - name: Download SPIR-V Headers
         uses: actions/download-artifact@v4
@@ -104,16 +134,19 @@ jobs:
           name: spirv-headers
           path: ./.artifacts/spirv-headers
 
-      - name: Final iOS Build
+      - name: Stage SPIR-V Headers
+        run: rsync -a ./.artifacts/spirv-headers/ ./
+
+      - name: Build iOS Archive
         env:
           IOS_CONFIGURATION: ${{ inputs.configuration }}
-        run: |
-          rsync -a ./.artifacts/spirv-headers/ ./
-          chmod +x ./scripts/ci/build-ios.sh
-          ./scripts/ci/build-ios.sh
+          # Passing Metal graphics abstractions & controls straight to the iOS compilation stage
+          EXTRA_CMAKE_FLAGS: "-DENABLE_GENERATIONS_CONTROLS=ON -DENABLE_MOBILE_TOUCH_CONTROLS=ON -DUSE_METAL_BACKEND=ON"
+        run: bash ./scripts/ci/build-ios.sh
 
-      - name: Upload Finished IPA
+      - name: Upload iOS Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Unleashed-iOS-iPad9-Optimized
+          name: ios-${{ inputs.configuration }}
           path: ./out/artifacts/ios
+          if-no-files-found: error
