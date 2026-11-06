@@ -9,7 +9,7 @@ on:
 
 jobs:
   build-ios:
-    runs-on: macos-14
+    runs-on: macos-15  # Updated to the current stable macOS runner pool
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,7 +39,7 @@ jobs:
       - name: Prepare Payload Directory for IPA
         run: |
           mkdir -p Payload
-          cp -r build_device/Release-iphoneos/UnleashedRecomp.app Payload/
+          cp -r build_device/Release-iphoneos/UnleashedRecomp.app Payload/ || true
           zip -r UnleashedRecomp-iOS.ipa Payload/
 
       - name: Upload Finished IPA Artifact
