@@ -2,41 +2,48 @@ name: Build UnleashedRecomp iOS
 
 on:
   push:
-    branches: [ ios, main ]
+    branches: [ main, ios, master ]
   pull_request:
-    branches: [ ios, main ]
+    branches: [ main, ios, master ]
   workflow_dispatch:
 
 jobs:
   build-ios:
-    runs-on: macos-14  # Uses Apple Silicon or latest available macOS runner
+    runs-on: macos-14
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-
-      - name: Install Dependencies (CMake / Ninja)
+      - name: Install Build Tools
         run: brew install cmake ninja
 
-      - name: Configure CMake for iOS
+      - name: Configure CMake for iOS (Metal/ARM64)
         run: |
-          cmake -B out/build/ios-release \
-            -G "Xcode" \
+          mkdir -p build_device
+          cmake -S . -B build_device \
+            -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURE=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DPLATFORM=OS64
 
-      - name: Build iOS Target
+      - name: Build Target-Specific Apple Shaders & Binaries
         run: |
-          cmake --build out/build/ios-release --config Release --target UnleashedRecomp -sdk iphoneos
+          cmake --build build_device --config Release --target UnleashedRecomp -- -sdk iphoneos
 
-      - name: Archive Artifacts
+      - name: Prepare Payload Directory for IPA
+        run: |
+          mkdir -p Payload
+          cp -r build_device/Release-iphoneos/UnleashedRecomp.app Payload/
+          zip -r UnleashedRecomp-iOS.ipa Payload/
+
+      - name: Upload Finished IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: UnleashedRecomp-iOS-Release
-          path: out/build/ios-release/Release-iphoneos/
+          name: UnleashedRecomp-iOS-Build
+          path: UnleashedRecomp-iOS.ipa
