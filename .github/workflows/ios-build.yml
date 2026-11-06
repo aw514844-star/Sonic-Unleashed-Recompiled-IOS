@@ -9,7 +9,8 @@ on:
 
 jobs:
   build-ios:
-    runs-on: macos-15  # Updated to the current stable macOS runner pool
+    runs-on: macos-15
+    timeout-minutes: 360
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -17,33 +18,93 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install Build Tools
-        run: brew install cmake ninja
+      # Use a version that exists on the macos-15 image. Check the image's
+      # software list if this fails; 'latest-stable' is the safe fallback.
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
 
-      - name: Configure CMake for iOS (Metal/ARM64)
+      - name: Show toolchain info
         run: |
-          mkdir -p build_device
+          xcodebuild -version
+          cmake --version
+          xcrun --sdk iphoneos --show-sdk-path
+          df -h .
+
+      # UnleashedRecomp needs the user's own game files to generate the
+      # recompiled code. Store a private download URL in the repo secret
+      # GAME_FILES_URL (a zip containing the files, laid out as the project
+      # expects, e.g. UnleashedRecompLib/private/). Skipped if not set.
+      - name: Fetch game files (optional, private)
+        env:
+          GAME_FILES_URL: ${{ secrets.GAME_FILES_URL }}
+        run: |
+          if [ -z "$GAME_FILES_URL" ]; then
+            echo "GAME_FILES_URL not set; skipping. The build will fail if the project requires game files."
+            exit 0
+          fi
+          curl -fsSL "$GAME_FILES_URL" -o game_files.zip
+          unzip -q game_files.zip -d .
+          rm game_files.zip
+
+      - name: Configure CMake for iOS (arm64)
+        run: |
           cmake -S . -B build_device \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_ARCHITECTURE=arm64 \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-            -DPLATFORM=OS64
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO
 
-      - name: Build Target-Specific Apple Shaders & Binaries
+      - name: Build
         run: |
-          cmake --build build_device --config Release --target UnleashedRecomp -- -sdk iphoneos
+          cmake --build build_device --config Release --target UnleashedRecomp -- \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
 
-      - name: Prepare Payload Directory for IPA
+      - name: Package IPA (ad-hoc signed)
         run: |
+          APP_PATH=$(find build_device -name "UnleashedRecomp.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: UnleashedRecomp.app not found. Contents of build_device:"
+            find build_device -maxdepth 4 -type d | head -n 80
+            echo "The CMake target may not be declared as MACOSX_BUNDLE."
+            exit 1
+          fi
+          echo "Found app bundle at: $APP_PATH"
+
+          rm -rf Payload
           mkdir -p Payload
-          cp -r build_device/Release-iphoneos/UnleashedRecomp.app Payload/ || true
-          zip -r UnleashedRecomp-iOS.ipa Payload/
+          cp -R "$APP_PATH" Payload/
 
-      - name: Upload Finished IPA Artifact
+          # Optional: increased memory limit entitlement (helps with large
+          # guest memory mappings; still re-signed by sideloading tools).
+          cat > entitlements.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.developer.kernel.increased-memory-limit</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # Sign nested frameworks/dylibs first, then the bundle (no --deep).
+          find Payload/UnleashedRecomp.app \( -name "*.framework" -o -name "*.dylib" \) -print0 \
+            | xargs -0 -I{} codesign --force --sign - "{}" || true
+          codesign --force --sign - --entitlements entitlements.plist Payload/UnleashedRecomp.app
+
+          zip -qyr UnleashedRecomp-iOS.ipa Payload/
+          ls -lh UnleashedRecomp-iOS.ipa
+
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: UnleashedRecomp-iOS-Build
           path: UnleashedRecomp-iOS.ipa
+          if-no-files-found: error
